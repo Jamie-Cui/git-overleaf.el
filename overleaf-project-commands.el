@@ -110,7 +110,7 @@ background before calling CONTINUATION."
          (plist-get project :name)
          target))))))
 
-(defun overleaf-project--clone-1 (&optional url target-directory)
+(defun overleaf-project--clone-sync (&optional url target-directory)
   "Synchronously clone a full Overleaf project into TARGET-DIRECTORY."
   (let* ((url (or url (overleaf-project--url)))
          (project nil)
@@ -176,7 +176,7 @@ background before calling CONTINUATION."
        repo
        (plist-get project :name))))))
 
-(defun overleaf-project--init-1 (&optional directory url confirm)
+(defun overleaf-project--init-sync (&optional directory url confirm)
   "Synchronously bind DIRECTORY to an Overleaf project on URL.
 When CONFIRM is non-nil, ask before rebinding an existing project."
   (let* ((repo (overleaf-project--require-repo directory))
@@ -270,7 +270,7 @@ When NOERROR is non-nil, demote setup and background errors to warnings."
 							(overleaf-project--async-start
 							 name
 							 (lambda ()
-							   (overleaf-project--push-1 repo unstaged-action t))
+							   (overleaf-project--push-sync repo unstaged-action t))
 							 :key (overleaf-project--repo-async-key repo)
 							 :on-error
 							 (lambda (message)
@@ -312,7 +312,7 @@ When NOERROR is non-nil, demote setup and background errors to warnings."
 						 (format "Overleaf remote overwrite `%s'"
 							 (overleaf-project--project-name repo))
 						 (lambda ()
-						   (overleaf-project--overwrite-remote-1 repo unstaged-action t))
+						   (overleaf-project--overwrite-remote-sync repo unstaged-action t))
 						 :key (overleaf-project--repo-async-key repo)))))))
 
 (defun overleaf-project--pull-async (repo)
@@ -336,7 +336,7 @@ When NOERROR is non-nil, demote setup and background errors to warnings."
 					      (overleaf-project--async-start
 					       (format "Overleaf pull `%s'" (overleaf-project--project-name repo))
 					       (lambda ()
-						 (overleaf-project--pull-1 repo t))
+						 (overleaf-project--pull-sync repo t))
 					       :key (overleaf-project--repo-async-key repo))))))
 
 ;;;; Interactive commands
@@ -349,7 +349,7 @@ If URL is nil, use `overleaf-project-url'."
   (if (and (called-interactively-p 'interactive)
            (overleaf-project--async-enabled-p))
       (overleaf-project--clone-async url target-directory)
-    (overleaf-project--clone-1 url target-directory)))
+    (overleaf-project--clone-sync url target-directory)))
 
 ;;;###autoload
 (defun overleaf-project-init (&optional directory url)
@@ -362,7 +362,7 @@ snapshot used by later `overleaf-project-push' and
     (if (and interactive-p
              (overleaf-project--async-enabled-p))
         (overleaf-project--init-async directory url)
-      (overleaf-project--init-1 directory url interactive-p))))
+      (overleaf-project--init-sync directory url interactive-p))))
 
 ;;;###autoload
 (defun overleaf-project-push (&optional directory noerror)
@@ -396,14 +396,14 @@ useful for hooks such as `git-commit-post-finish-hook'."
      (noerror
       (overleaf-project--with-repo-log-context repo
 					       (condition-case err
-						   (overleaf-project--push-1 repo)
+						   (overleaf-project--push-sync repo)
 						 (error
 						  (overleaf-project--warn "Automatic Overleaf push failed for %s: %s"
 									  repo (error-message-string err))))))
      (t
-      (overleaf-project--push-1 repo)))))
+      (overleaf-project--push-sync repo)))))
 
-(defun overleaf-project--push-1 (repo &optional unstaged-action skip-auth)
+(defun overleaf-project--push-sync (repo &optional unstaged-action skip-auth)
   "Internal: perform the actual push for managed REPO.
 UNSTAGED-ACTION is passed to
 `overleaf-project--prepare-working-tree-for-sync'.  When SKIP-AUTH is
@@ -447,7 +447,7 @@ are replaced by the local `HEAD' snapshot."
     (if (and (called-interactively-p 'interactive)
              (overleaf-project--async-enabled-p))
         (overleaf-project--overwrite-remote-async repo)
-      (overleaf-project--overwrite-remote-1 repo nil nil))))
+      (overleaf-project--overwrite-remote-sync repo nil nil))))
 
 ;;;###autoload
 (define-obsolete-function-alias
@@ -455,7 +455,7 @@ are replaced by the local `HEAD' snapshot."
   'overleaf-project-overwrite-remote
   "2.0.0")
 
-(defun overleaf-project--overwrite-remote-1
+(defun overleaf-project--overwrite-remote-sync
     (repo &optional unstaged-action skip-auth)
   "Synchronously overwrite Overleaf with REPO.
 UNSTAGED-ACTION is passed to
@@ -506,9 +506,9 @@ commit, then run `overleaf-project-push' to complete the sync."
     (if (and (called-interactively-p 'interactive)
              (overleaf-project--async-enabled-p))
         (overleaf-project--pull-async repo)
-      (overleaf-project--pull-1 repo nil))))
+      (overleaf-project--pull-sync repo nil))))
 
-(defun overleaf-project--pull-1 (repo &optional skip-auth)
+(defun overleaf-project--pull-sync (repo &optional skip-auth)
   "Synchronously pull the latest Overleaf snapshot into REPO.
 When SKIP-AUTH is non-nil, assume the caller already checked
 authentication."

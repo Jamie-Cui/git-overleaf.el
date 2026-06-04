@@ -198,7 +198,7 @@ ON-SUCCESS, when non-nil, is called after cookies are saved and applied."
   (overleaf-project--async-start
    (format "Overleaf authentication for %s" (overleaf-project--url-host))
    (lambda ()
-     (overleaf-project--authenticate-1 overleaf-project-url))
+     (overleaf-project--authenticate-sync overleaf-project-url))
    :key (format "auth:%s" (overleaf-project--url))
    :on-success
    (lambda (full-cookies)
@@ -263,7 +263,7 @@ If URL is nil, use `overleaf-project-url'.  Return the saved full cookie alist."
             (oref (oref session service) process)))
          (overleaf-project--webdriver-session-stop session))))))
 
-(defun overleaf-project--authenticate-1 (&optional url)
+(defun overleaf-project--authenticate-sync (&optional url)
   "Synchronously authenticate to URL using `overleaf-project-auth-backend'."
   (pcase overleaf-project-auth-backend
     ('webdriver
@@ -282,7 +282,7 @@ If URL is nil, use `overleaf-project-url'."
   (if (and (called-interactively-p 'interactive)
            (overleaf-project--async-enabled-p))
       (overleaf-project--start-authentication-async url)
-    (overleaf-project--authenticate-1 url)))
+    (overleaf-project--authenticate-sync url)))
 
 
 (provide 'overleaf-project-auth)
