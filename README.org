@@ -2,135 +2,137 @@
 :ID:       9d694771-66a1-46dc-873a-858289333e3d
 :END:
 #+title: overleaf-project
+#+subtitle: Git-based Overleaf project synchronization for Emacs
 
 Chinese README: [[file:README.zh.org][README.zh.org]]
 
-Inspired by [[https://github.com/vale981/overleaf.el][vale981/overleaf.el]].
+~overleaf-project~ integrates Emacs with Overleaf at the project level.  It
+clones an Overleaf project into a local Git repository, records the
+Overleaf project metadata in that repository, and synchronizes complete
+project snapshots between local Git history and Overleaf.
 
-The key difference from the original: ~overleaf.el~ provides a
-single-buffer live editing workflow where each save syncs one file in
-real time.  ~overleaf-project~ instead treats the whole Overleaf
-project as a Git repository — you commit locally at your own pace and
-push/pull entire snapshots, which makes conflict resolution and history
-management much more tractable.  When pushing changes to an existing
-Overleaf text document, it updates that document through Overleaf's
-real-time text OT channel so the document id and web history are
-preserved.
+This package is designed for users who prefer local LaTeX editing,
+ordinary Git commits, and Git-based conflict resolution while still
+collaborating with people who use the Overleaf web editor.
 
-~overleaf-project~ provides project-level Overleaf integration for Emacs:
+* Features
 
-- clone a full Overleaf project to a local Git repository
-- keep editing locally with normal Git commits
-- push committed local snapshots to Overleaf and pull remote updates back
-- resolve local/remote divergence with normal =git merge= on a dedicated branch
+- Clone a complete Overleaf project into a local Git repository.
+- Bind an existing Git repository to an Overleaf project.
+- Push local Git snapshots to Overleaf and pull remote Overleaf changes
+  back into the current branch.
+- Detect local/remote divergence by comparing the last synchronized
+  commit, local ~HEAD~, and the latest Overleaf snapshot.
+- Resolve conflicts with normal Git merge tools, including Magit.
+- Preserve existing Overleaf text document ids when possible by updating
+  documents through Overleaf's real-time text OT channel.
+- Store authentication cookies in ~auth-source~, a plain cookie file, or
+  the current Emacs session.
+- Optionally run network, unzip, and Git work in background Emacs threads.
+- Provide optional ~magit-status~ integration for Overleaf-managed
+  repositories.
 
-This package no longer provides the old single-buffer live editing workflow.
-Load ~overleaf-project~ directly in both new and existing configs.
+~overleaf-project~ does not provide the single-buffer live editing
+workflow of [[https://github.com/vale981/overleaf.el][overleaf.el]].  New and existing configurations should load
+~overleaf-project~ directly.
 
-* Installation
+* Requirements
 
-Add the package to your load path and require ~overleaf-project~, or use
-=use-package=:
+~overleaf-project~ requires Emacs 29.4 or later and the following Elisp
+packages:
 
-#+begin_src elisp
-  (use-package overleaf-project
-    :custom
-    (overleaf-project-url "https://www.overleaf.com"))
-#+end_src
+- =websocket= 1.15 or later
+- =webdriver= 0.1 or later
 
-The package targets Emacs 29.4+ and depends on the Elisp packages
-=websocket= and =webdriver=.
-
-The package feature, interactive commands, and customization variables
-use the ~overleaf-project-~ prefix to avoid colliding with
-~overleaf.el~.
-
-If you use a self-hosted Overleaf instance, set the server URL:
-
-#+begin_src elisp
-  (setopt overleaf-project-url "https://latex.example.edu")
-#+end_src
-
-** External tools
-
-Project push/pull expects these executables to be available:
+Project synchronization also requires these external executables:
 
 - =git=
 - =curl=
 - =unzip=
 
-The default webdriver authentication backend also needs =geckodriver=
-(https://github.com/mozilla/geckodriver).  Each webdriver authentication
-attempt starts geckodriver on a free local port, so a stale driver
-already listening on the default port =4444= should not block
-re-authentication.  The Firefox cookie import backend does not need
-geckodriver, but it does require an Emacs build with SQLite support.
+The default authentication backend uses Firefox through Selenium
+webdriver and requires =geckodriver=.  The Firefox cookie import backend
+does not require =geckodriver=, but it requires an Emacs build with
+SQLite support.
 
-* Development
+* Installation
 
-For local validation, the repository includes a small =Makefile=:
+** Package archives
 
-#+begin_example
-make
-make help
-make clean
-#+end_example
-
-If your Emacs binary is not available on =PATH= as =emacs=, override it explicitly:
+When installing from a package archive such as MELPA, use Emacs'
+package manager:
 
 #+begin_example
-make EMACS=/path/to/Emacs
+M-x package-refresh-contents RET
+M-x package-install RET overleaf-project RET
 #+end_example
+
+With =use-package=:
+
+#+begin_src elisp
+  (use-package overleaf-project
+    :ensure t
+    :custom
+    (overleaf-project-url "https://www.overleaf.com"))
+#+end_src
+
+For a self-hosted Overleaf instance, set the server URL before using the
+interactive commands:
+
+#+begin_src elisp
+  (setopt overleaf-project-url "https://latex.example.edu")
+#+end_src
+
+** Manual checkout
+
+If using a local checkout, install the Elisp dependencies separately and
+add this repository to ~load-path~:
+
+#+begin_src elisp
+  (add-to-list 'load-path "/path/to/overleaf-project")
+  (require 'overleaf-project)
+#+end_src
+
+The package feature, interactive commands, and customization variables
+use the ~overleaf-project-~ prefix.
+
+* Quick Start
+
+1. Authenticate with Overleaf:
+
+   #+begin_example
+   M-x overleaf-project-authenticate
+   #+end_example
+
+2. Clone an Overleaf project:
+
+   #+begin_example
+   M-x overleaf-project-clone
+   #+end_example
+
+3. Edit locally and commit changes with Git.
+
+4. Push local commits to Overleaf:
+
+   #+begin_example
+   M-x overleaf-project-push
+   #+end_example
+
+5. Pull remote Overleaf changes when collaborators edit in the web
+   editor:
+
+   #+begin_example
+   M-x overleaf-project-pull
+   #+end_example
+
+If the project already exists as a local Git repository, run
+~overleaf-project-init~ instead of ~overleaf-project-clone~ to bind it to
+an Overleaf project.
 
 * Authentication
 
-You need valid Overleaf session cookies before cloning, pushing, or pulling.
-
-** ~overleaf-project-authenticate~
-
-By default, ~overleaf-project-authenticate~ stores cookies in Emacs auth-source.
-It uses the first plain file entry from ~auth-sources~, falling back to
-=~/.authinfo=.  The package keeps one Overleaf-managed record per host,
-using =login overleaf-project= and =port overleaf-project-cookie=.  Re-authentication
-replaces that managed record instead of appending stale copies.
-
-By default, authentication uses Selenium webdriver and asks you to log in
-through Firefox.  If you already have a normal Firefox profile logged in
-to Overleaf, you can import its existing cookies instead:
-
-#+begin_src elisp
-  (setopt overleaf-project-auth-backend 'firefox-cookies)
-#+end_src
-
-With this backend, ~overleaf-project-authenticate~ reads Firefox's
-default profile from =profiles.ini= and imports only cookies for the
-configured ~overleaf-project-url~.  If Firefox has no Overleaf session
-cookie, or if the session cookie is expired, the command fails with a
-message asking you to log in to Overleaf in Firefox and retry.  You can
-override profile discovery with:
-
-#+begin_src elisp
-  (setopt overleaf-project-firefox-profile "/path/to/firefox/profile")
-#+end_src
-
-If you prefer a plain file instead, set:
-
-#+begin_src elisp
-  (setopt overleaf-project-cookie-storage "~/.overleaf-project-cookies")
-#+end_src
-
-If you want cookies to stay only in memory for the current Emacs
-session, set:
-
-#+begin_src elisp
-  (setopt overleaf-project-cookie-storage nil)
-#+end_src
-
-For fully custom setups, you can still set ~overleaf-project-cookies~ and
-~overleaf-project-save-cookies~ directly, or use the file helpers
-~overleaf-project-read-cookies-from-file~ and ~overleaf-project-save-cookies-to-file~.
-
-Then run:
+Valid Overleaf session cookies are required before cloning, pushing, or
+pulling.  The primary command is:
 
 #+begin_example
 M-x overleaf-project-authenticate
@@ -138,11 +140,67 @@ M-x overleaf-project-authenticate
 
 If ~overleaf-project-clone~, ~overleaf-project-init~,
 ~overleaf-project-push~, ~overleaf-project-overwrite-remote~, or
-~overleaf-project-pull~ starts without valid cookies, the command asks
-in the minibuffer whether it should run ~overleaf-project-authenticate~
-immediately.  For cookies saved by ~overleaf-project-authenticate~, expiry is
+~overleaf-project-pull~ starts without valid cookies, it prompts in the
+minibuffer to run ~overleaf-project-authenticate~ first.
+
+** Webdriver backend
+
+The default backend is ~webdriver~:
+
+#+begin_src elisp
+  (setopt overleaf-project-auth-backend 'webdriver)
+#+end_src
+
+It starts =geckodriver= on a free local port, opens Firefox, and asks you
+to log in to Overleaf.  A stale =geckodriver= process listening on the
+default port =4444= should not prevent re-authentication.
+
+By default, authenticated cookies are stored with Emacs ~auth-source~.
+The package uses the first plain-file entry in ~auth-sources~, falling
+back to =~/.authinfo=.  It manages one entry per Overleaf host using
+=login overleaf-project= and =port overleaf-project-cookie=.
+Re-authentication replaces that managed entry instead of appending stale
+copies.
+
+** Firefox cookie import
+
+If Firefox is already logged in to Overleaf, cookies can be imported from
+the default Firefox profile:
+
+#+begin_src elisp
+  (setopt overleaf-project-auth-backend 'firefox-cookies)
+#+end_src
+
+This backend reads =profiles.ini=, imports only cookies for the current
+~overleaf-project-url~, and fails with an explicit message if no valid
+Overleaf session cookie is found.  To bypass profile discovery:
+
+#+begin_src elisp
+  (setopt overleaf-project-firefox-profile "/path/to/firefox/profile")
+#+end_src
+
+** Cookie storage
+
+To store cookies in a plain file:
+
+#+begin_src elisp
+  (setopt overleaf-project-cookie-storage "~/.overleaf-project-cookies")
+#+end_src
+
+To keep cookies only in memory for the current Emacs session:
+
+#+begin_src elisp
+  (setopt overleaf-project-cookie-storage nil)
+#+end_src
+
+Advanced configurations may set ~overleaf-project-cookies~ and
+~overleaf-project-save-cookies~ directly, or use the file helpers
+~overleaf-project-read-cookies-from-file~ and
+~overleaf-project-save-cookies-to-file~.
+
+For cookies saved by ~overleaf-project-authenticate~, session expiry is
 checked from the locally saved session-cookie expiry before any network
-request; short-lived analytics cookies are ignored for that check.
+request.  Short-lived analytics cookies are ignored for that check.
 
 * Workflow
 
@@ -154,76 +212,42 @@ Run:
 M-x overleaf-project-clone
 #+end_example
 
-This command:
+The command prompts for an Overleaf project, downloads the complete
+project zip, creates a local Git repository, commits the imported
+snapshot, and stores Overleaf metadata in the repository's local Git
+config.
 
-- uses the configured ~overleaf-project-url~ and prompts for the project
-- downloads the full project zip
-- creates a local Git repository
-- commits the imported snapshot
-- stores Overleaf metadata in the repo's local Git config
+** Bind an existing repository
 
-** Bind an existing Git repo
-
-If you already have a local Git repository with the project files, run:
+Run this command from an existing Git repository:
 
 #+begin_example
 M-x overleaf-project-init
 #+end_example
 
-This command:
-
-- prompts for the remote Overleaf project
-- stores Overleaf metadata in the repo's local Git config
-- initializes the hidden base snapshot used by later push/pull operations
-- does not automatically pull from or push to Overleaf
+The command prompts for the remote Overleaf project, stores project
+metadata in local Git config, and initializes the hidden base snapshot
+used by later push and pull operations.  It does not automatically pull
+from or push to Overleaf.
 
 ** Edit locally
 
-After cloning, work in the repo normally:
+After cloning or initializing, use the repository as an ordinary Git
+working tree:
 
-- edit files locally
-- optionally stage only the changes you want to include
-- run ~M-x overleaf-project-push~ to upload local commits
-- run ~M-x overleaf-project-pull~ to bring remote Overleaf changes back
+- edit files locally;
+- stage and commit changes as needed;
+- run ~overleaf-project-push~ to upload local commits;
+- run ~overleaf-project-pull~ to incorporate remote Overleaf changes.
 
-~overleaf-project-push~ prepares the local branch before talking to
-Overleaf:
+~overleaf-project-push~ prepares the local branch before contacting
+Overleaf.  If staged changes exist, it commits them automatically.  If
+unstaged or untracked files exist, it asks whether to stage all changes
+first.  It then fetches the latest remote snapshot and uploads local
+~HEAD~ only when the remote state has not diverged.
 
-- if there are staged changes, it commits them automatically
-- if there are unstaged or untracked files, it asks whether to stage all changes first
-- it then fetches the latest remote Overleaf snapshot and uploads ~HEAD~
-  only when the remote has not diverged
-
-~overleaf-project-pull~ requires a clean working tree and merges the
-latest Overleaf snapshot into the current branch.
-
-By default, commands run synchronously.  If you set
-~overleaf-project-enable-async~ to non-nil, interactive commands collect
-minibuffer input and confirmation in the foreground, then run the long
-network, unzip, and Git work in the background.  This keeps Emacs
-responsive while clone, init, push, pull, remote overwrite,
-authentication, and Magit remote refreshes are waiting on Overleaf or
-external tools.
-
-Run ~M-x overleaf-project-force-stop~ to cancel all currently tracked
-background Overleaf operations.  It interrupts their external processes
-where possible, clears async locks, and drops pending foreground
-callbacks.  Cancellation is best effort: work already completed locally
-or remotely is not rolled back.
-
-Both commands still have to run from a normal branch rather than a
-detached ~HEAD~.
-
-By default, successful push operations also maintain a root-level
-~.overleaf-project-sync.json~ file on the Overleaf project.  That file
-records the last local Git commit/tree uploaded by this package.  It is
-removed from downloaded snapshots before Git comparisons, so it acts as
-remote sync bookkeeping rather than normal project content.
-
-The package also creates local safety refs under
-~refs/overleaf-project/backups/~ before sync steps that can move the current
-branch or complete pending sync state.  These refs keep previous local
-commits reachable independently of branch movement and reflog expiry.
+~overleaf-project-pull~ requires a clean working tree and must run from a
+normal branch, not a detached ~HEAD~.
 
 ** Push to Overleaf
 
@@ -235,43 +259,29 @@ M-x overleaf-project-push
 
 The command compares three states:
 
-- the last successfully synced Git commit
-- the current local ~HEAD~
-- the latest project snapshot downloaded from Overleaf
+- the last successfully synchronized Git commit;
+- the current local ~HEAD~;
+- the latest project snapshot downloaded from Overleaf.
 
-Then it behaves as follows:
+Its behavior is:
 
-- if only local changed, it uploads ~HEAD~ to Overleaf
-- if remote already matches ~HEAD~, it only updates the base ref
-- if only remote changed, it stops and asks you to run ~overleaf-project-pull~
-- if both changed differently, it stops and asks you to run
-  ~overleaf-project-pull~ first
+| State | Result |
+|-------+--------|
+| Only local changed | Upload local ~HEAD~ to Overleaf. |
+| Remote already matches ~HEAD~ | Update the base ref only. |
+| Only remote changed | Stop and ask you to run ~overleaf-project-pull~. |
+| Local and remote both changed differently | Stop and ask you to pull first. |
 
-For existing remote Overleaf ~doc~ entries, changed UTF-8 text is updated
-through Overleaf's real-time ShareJS text OT path.  That preserves the
-remote document id and produces normal Overleaf web history entries.
-Changed binary/file entries, newly added files, type conflicts, and
-deleted entries still use Overleaf's file upload/delete APIs.  If a
-remote doc cannot be updated through supported text OT, for example
-because it is not valid UTF-8, uses Overleaf's newer ~history-ot~ type,
-or changes again after the snapshot is downloaded, the push fails instead
-of silently deleting and recreating that doc.
+For existing remote Overleaf text documents, changed UTF-8 text is
+updated through Overleaf's real-time ShareJS text OT path.  This
+preserves the remote document id and produces normal Overleaf web
+history entries.  Changed binary files, newly added files, type
+conflicts, and deleted entries use Overleaf's upload and delete APIs.
 
-** Overwrite the Overleaf remote
-
-Run:
-
-#+begin_example
-M-x overleaf-project-overwrite-remote
-#+end_example
-
-This command uses the same local auto-commit preparation as
-~overleaf-project-push~, but always replaces the remote Overleaf project
-contents with the local ~HEAD~ snapshot.  Existing remote docs are still
-updated through text OT when possible; non-doc files and type conflicts
-are replaced through Overleaf upload/delete APIs.  Use it only as a
-recovery command when you intentionally want local files to replace the
-remote state.
+If a remote document cannot be updated through supported text OT, for
+example because it is not valid UTF-8, uses Overleaf's newer
+~history-ot~ type, or changes again after the snapshot is downloaded, the
+push fails instead of silently deleting and recreating that document.
 
 ** Pull from Overleaf
 
@@ -281,54 +291,112 @@ Run:
 M-x overleaf-project-pull
 #+end_example
 
-The command compares the same three states and then behaves as follows:
+The command compares the same three states.  Its behavior is:
 
-- if only remote changed, it fast-forwards your current branch locally
-- if local already matches the remote snapshot, it only updates the base ref
-- if there are no remote changes, it reports that nothing needs to be pulled
-- if both changed differently, it merges the remote snapshot into the
-  current branch; after a clean merge, run ~overleaf-project-push~ to
-  publish the merged result back to Overleaf
+| State | Result |
+|-------+--------|
+| Only remote changed | Fast-forward the current branch locally. |
+| Local already matches the remote snapshot | Update the base ref only. |
+| No remote changes | Report that nothing needs to be pulled. |
+| Local and remote both changed differently | Merge the remote snapshot into the current branch. |
 
-The clone, config, push, and pull commands store project metadata in the
-repository's local Git config, so later pushes and pulls can run from
-anywhere inside that repo.
+After a clean merge caused by remote divergence, run
+~overleaf-project-push~ to publish the merged result back to Overleaf.
 
-* Conflict handling
+** Overwrite the Overleaf remote
 
-When both local and remote changed, run ~overleaf-project-pull~ first.
-It merges the downloaded remote snapshot into the current branch with
-normal Git merge machinery.
+Run:
+
+#+begin_example
+M-x overleaf-project-overwrite-remote
+#+end_example
+
+This recovery command uses the same local preparation as
+~overleaf-project-push~, but always replaces the remote Overleaf project
+contents with the local ~HEAD~ snapshot.  Existing remote text documents
+are still updated through text OT when supported; other entries use
+Overleaf upload and delete APIs.  Use this command only when the local
+state is intended to replace the remote state.
+
+** Conflict handling
+
+When local and remote snapshots diverge, run ~overleaf-project-pull~
+first.  The command merges the downloaded remote snapshot into the
+current branch with normal Git merge machinery.
 
 If the merge conflicts:
 
-- the current branch is left in Git's normal conflicted merge state
-- you resolve conflicts with Magit or plain Git
-- after creating the merge commit, run ~overleaf-project-push~ to upload
-  the merged result
+- the current branch remains in Git's normal conflicted merge state;
+- resolve conflicts with Magit or plain Git;
+- create the merge commit;
+- run ~overleaf-project-push~ to upload the merged result.
 
-This keeps conflict resolution entirely inside Git instead of ediff.
+Conflict resolution is intentionally handled by Git rather than by ediff.
 
-* Push on Commit
+* Synchronization Details
 
-If you commit from Emacs via Magit / =git-commit=, you can trigger push
-automatically after each commit:
+The clone, init, push, and pull commands store project metadata in the
+repository's local Git config.  After a repository is bound, later pushes
+and pulls can run from anywhere inside that repository.
+
+Successful push operations maintain a root-level
+~.overleaf-project-sync.json~ file on the Overleaf project when
+~overleaf-project-sync-metadata-enabled~ is non-nil.  The file records the
+last local Git commit and tree uploaded by this package.  It is removed
+from downloaded snapshots before Git comparisons, so it acts as sync
+bookkeeping rather than normal project content.  It should not be tracked
+in the local Git repository.
+
+Before sync steps that can move the current branch or complete pending
+sync state, the package creates local safety refs under
+~refs/overleaf-project/backups/~ when
+~overleaf-project-local-backups-enabled~ is non-nil.  These refs keep
+previous local commits reachable independently of branch movement and
+reflog expiry.
+
+Inspect backup refs with:
+
+#+begin_example
+git show-ref refs/overleaf-project/backups
+#+end_example
+
+Recover one by creating a normal branch from the backup ref:
+
+#+begin_example
+git branch recover-overleaf refs/overleaf-project/backups/...
+#+end_example
+
+Empty directories are not tracked by Git and are therefore not preserved
+by push or pull.
+
+* Asynchronous Operation
+
+By default, commands run synchronously.  To keep Emacs responsive while
+long network, unzip, and Git work is running:
 
 #+begin_src elisp
-  (with-eval-after-load 'git-commit
-    (add-hook 'git-commit-post-finish-hook
-              (lambda () (overleaf-project-push nil t))))
+  (setopt overleaf-project-enable-async t)
 #+end_src
 
-The hook only pushes repositories that already contain Overleaf project
-metadata.  With the default synchronous setting, this hook blocks Emacs
-while the push runs.  Set ~overleaf-project-enable-async~ to non-nil if
-you want hook-driven pushes to run in the background.
+Interactive commands still collect minibuffer input and confirmation in
+the foreground, then run the expensive work in the background.  This
+applies to clone, init, push, pull, remote overwrite, authentication, and
+Magit remote refreshes.
 
-* Magit Status
+To cancel currently tracked background Overleaf operations:
 
-If you want an Overleaf section inside =magit-status=, load the optional
-=overleaf-project-magit= integration and enable it once:
+#+begin_example
+M-x overleaf-project-force-stop
+#+end_example
+
+Cancellation interrupts external processes where possible, clears async
+locks, and drops pending foreground callbacks.  Work already completed
+locally or remotely is not rolled back.
+
+* Magit Integration
+
+To display an Overleaf section in =magit-status=, load the optional
+integration:
 
 #+begin_src elisp
   (with-eval-after-load 'magit
@@ -338,109 +406,163 @@ If you want an Overleaf section inside =magit-status=, load the optional
 
 For Overleaf-managed repositories, each =magit-status= refresh may also
 start a background refresh of the remote Overleaf snapshot when
-~overleaf-project-enable-async~ is non-nil.  The automatic refresh is
-throttled by =overleaf-project-magit-auto-refresh-remote-interval= so
-ordinary Magit refreshes do not repeatedly download snapshots and
-trigger Overleaf rate limits.  When the download finishes, the status
-buffer refreshes again and shows the remote diff against the last synced
-base snapshot.
+~overleaf-project-enable-async~ is non-nil.  Automatic refresh is
+throttled by ~overleaf-project-magit-auto-refresh-remote-interval~ so
+ordinary Magit refreshes do not repeatedly download snapshots.
 
-If you prefer to keep remote refresh manual, set
-=overleaf-project-magit-auto-refresh-remote= to =nil=.  You can still
-run ~M-x overleaf-project-magit-refresh-remote~ manually.
+To keep remote refresh manual:
+
+#+begin_src elisp
+  (setopt overleaf-project-magit-auto-refresh-remote nil)
+#+end_src
+
+Remote state can still be refreshed with:
+
+#+begin_example
+M-x overleaf-project-magit-refresh-remote
+#+end_example
+
+* Commit Hook
+
+To push automatically after commits created from Emacs through Magit or
+=git-commit=:
+
+#+begin_src elisp
+  (with-eval-after-load 'git-commit
+    (add-hook 'git-commit-post-finish-hook
+              (lambda () (overleaf-project-push nil t))))
+#+end_src
+
+The hook only pushes repositories that already contain Overleaf project
+metadata.  With synchronous commands, this hook blocks Emacs while the
+push runs.  Enable ~overleaf-project-enable-async~ for background
+hook-driven pushes.
 
 * Commands
 
-The main interactive commands are:
+| Command | Purpose |
+|---------+---------|
+| ~overleaf-project-authenticate~ | Authenticate and store Overleaf cookies. |
+| ~overleaf-project-clone~ | Clone an Overleaf project into a new local Git repository. |
+| ~overleaf-project-init~ | Bind the current Git repository to an Overleaf project. |
+| ~overleaf-project-push~ | Upload local ~HEAD~ to Overleaf when the remote has not diverged. |
+| ~overleaf-project-overwrite-remote~ | Replace the remote Overleaf project with local ~HEAD~. |
+| ~overleaf-project-pull~ | Pull and merge the latest Overleaf snapshot. |
+| ~overleaf-project-browse-remote~ | Open the bound Overleaf project in a browser. |
+| ~overleaf-project-force-stop~ | Cancel tracked background Overleaf operations. |
+| ~overleaf-project-log~ | Display the global log buffer. |
+| ~overleaf-project-log-clear~ | Clear the global log buffer. |
 
-- ~overleaf-project-authenticate~
-- ~overleaf-project-clone~
-- ~overleaf-project-init~
-- ~overleaf-project-push~
-- ~overleaf-project-overwrite-remote~
-- ~overleaf-project-pull~
-- ~overleaf-project-browse-remote~
-- ~overleaf-project-force-stop~
-- ~overleaf-project-log~
-- ~overleaf-project-log-clear~
-
-You can also bind the provided command map:
+To bind the provided command map:
 
 #+begin_src elisp
   (global-set-key (kbd "C-c o") overleaf-project-command-map)
 #+end_src
 
-The default bindings inside that map are:
+Default bindings in ~overleaf-project-command-map~:
 
-- =a= -> ~overleaf-project-authenticate~
-- =b= -> ~overleaf-project-browse-remote~
-- =c= -> ~overleaf-project-clone~
-- =k= -> ~overleaf-project-force-stop~
-- =l= -> ~overleaf-project-pull~
-- =p= -> ~overleaf-project-push~
-- =s= -> ~overleaf-project-push~ (compatibility shortcut)
+| Key | Command |
+|-----+---------|
+| =a= | ~overleaf-project-authenticate~ |
+| =b= | ~overleaf-project-browse-remote~ |
+| =c= | ~overleaf-project-clone~ |
+| =k= | ~overleaf-project-force-stop~ |
+| =l= | ~overleaf-project-pull~ |
+| =p= | ~overleaf-project-push~ |
+| =s= | ~overleaf-project-push~ |
+
+The =s= binding is retained as a compatibility shortcut.
 
 * Customization
 
-Useful options include:
+Important user options include:
 
-- ~overleaf-project-url~ for the Overleaf server URL
-- ~overleaf-project-auth-backend~ to choose webdriver authentication or
-  Firefox cookie import
-- ~overleaf-project-firefox-profile~ to override Firefox profile
-  auto-detection
-- ~overleaf-project-cache-cookies~ to force cookie reloads instead of caching
-- ~overleaf-project-debug~ for verbose logging
-- ~overleaf-project-log-buffer-name~ for the global log buffer name
-- ~overleaf-project-log-echo~ to control whether log entries also appear in
-  the minibuffer
-- ~overleaf-project-log-time-format~ to customize log entry timestamps
-- ~overleaf-project-sync-auto-commit-message~ for the automatic local checkpoint commit before pushing
-- ~overleaf-project-enable-async~ to keep interactive commands and push
-  hooks from blocking Emacs during network, unzip, and Git work
-- ~overleaf-project-magit-auto-refresh-remote-interval~ to throttle
-  automatic Magit remote snapshot downloads
-- ~overleaf-project-sync-metadata-enabled~ to control whether push writes
-  remote sync metadata
-- ~overleaf-project-sync-metadata-file~ to rename the reserved remote
-  metadata file
-- ~overleaf-project-local-backups-enabled~ to control whether sync
-  operations create local safety refs
-- ~overleaf-project-local-backup-ref-prefix~ to choose the backup ref
-  namespace
-- ~overleaf-project-socket-timeout~ if project tree websocket fetches need longer
-- ~overleaf-project-curl-connect-timeout~ and ~overleaf-project-curl-max-time~ to cap
-  curl calls during Overleaf HTTP requests
-- ~overleaf-project-git-executable~, ~overleaf-project-curl-executable~ and
-  ~overleaf-project-unzip-executable~ if the tools are not on your =PATH=
+| Option | Description |
+|--------+-------------|
+| ~overleaf-project-url~ | Overleaf server URL. |
+| ~overleaf-project-auth-backend~ | Authentication backend: ~webdriver~ or ~firefox-cookies~. |
+| ~overleaf-project-cookie-storage~ | Cookie storage backend: ~authinfo~, a file path, or nil. |
+| ~overleaf-project-firefox-profile~ | Explicit Firefox profile path for cookie import. |
+| ~overleaf-project-cache-cookies~ | Reuse loaded cookies instead of reloading storage each time. |
+| ~overleaf-project-enable-async~ | Run long interactive operations in background threads. |
+| ~overleaf-project-sync-auto-commit-message~ | Commit message for automatic local checkpoint commits before push. |
+| ~overleaf-project-sync-metadata-enabled~ | Enable the remote sync metadata file. |
+| ~overleaf-project-sync-metadata-file~ | Name of the reserved remote metadata file. |
+| ~overleaf-project-local-backups-enabled~ | Create local safety refs during sync operations. |
+| ~overleaf-project-local-backup-ref-prefix~ | Ref namespace for local safety refs. |
+| ~overleaf-project-socket-timeout~ | Timeout for websocket project tree fetches. |
+| ~overleaf-project-curl-connect-timeout~ | Maximum time allowed for curl connection setup. |
+| ~overleaf-project-curl-max-time~ | Maximum time allowed for curl requests. |
+| ~overleaf-project-git-executable~ | Git executable path. |
+| ~overleaf-project-curl-executable~ | Curl executable path. |
+| ~overleaf-project-unzip-executable~ | Unzip executable path. |
+| ~overleaf-project-debug~ | Enable verbose debug logging. |
+| ~overleaf-project-log-buffer-name~ | Global log buffer name. |
+| ~overleaf-project-log-echo~ | Echo log entries in the minibuffer. |
+| ~overleaf-project-log-time-format~ | Timestamp format for log entries. |
+| ~overleaf-project-magit-auto-refresh-remote~ | Automatically refresh remote snapshots from Magit. |
+| ~overleaf-project-magit-auto-refresh-remote-interval~ | Minimum seconds between automatic Magit remote refreshes. |
 
-* Notes
+Use =M-x customize-group RET overleaf-project RET= to inspect the full
+customization group.
 
-- Overleaf messages, warnings, and debug entries are written to the
-  global ~*overleaf-project-log*~ buffer.  Each entry includes timestamp,
-  level, and the best available project, repository, or Overleaf URL
-  context so logs from different projects can be distinguished.
-- Push preserves existing Overleaf text doc ids by using the real-time
-  ShareJS text OT path.  Non-doc files are still replaced when their
-  contents change.
-- ~overleaf-project-overwrite-remote~ overwrites the remote project with
-  local ~HEAD~, while preserving existing text doc ids when supported by
-  the same OT path.
-- ~.overleaf-project-sync.json~ is reserved for remote sync metadata when
-  metadata support is enabled.  It should not be tracked in the local Git
-  repository.  When it already exists as an Overleaf text doc, push
-  updates it through the same OT path instead of recreating it.
-- Local safety refs can be inspected with:
+* Logging
 
-  #+begin_example
-  git show-ref refs/overleaf-project/backups
-  #+end_example
+Overleaf messages, warnings, and debug entries are written to the global
+~*overleaf-project-log*~ buffer by default.  Each entry includes a
+timestamp, log level, and the best available project, repository, or
+Overleaf URL context, which helps distinguish logs from multiple
+projects.
 
-  To recover one, create a normal branch from the backup ref:
+Verbose debug entries can be enabled with:
 
-  #+begin_example
-  git branch recover-overleaf refs/overleaf-project/backups/...
-  #+end_example
-- Empty directories are not tracked by Git and therefore are not
-  preserved by push/pull.
-- Verbose debug entries can be enabled by setting ~overleaf-project-debug~ to ~t~.
+#+begin_src elisp
+  (setopt overleaf-project-debug t)
+#+end_src
+
+* Security Notes
+
+Overleaf cookies grant access to your Overleaf account.  Keep auth-source
+files and custom cookie files private, and do not commit real cookies,
+project identifiers, ancestor backup files, or debug logs that contain
+session data.
+
+* Development
+
+The repository includes a small =Makefile= for local validation:
+
+#+begin_example
+make
+make help
+make clean
+#+end_example
+
+If the Emacs executable is not available on =PATH= as =emacs=:
+
+#+begin_example
+make EMACS=/path/to/Emacs
+#+end_example
+
+Equivalent batch validation commands:
+
+#+begin_example
+emacs -Q --batch -L . --eval "(progn (require 'package) (package-initialize))" -f batch-byte-compile overleaf-project.el
+emacs -Q --batch -L . --eval "(progn (require 'package) (package-initialize))" --eval "(require 'overleaf-project)"
+#+end_example
+
+There is currently no committed automated test suite.  For
+sync-related changes, validate clone, init, push, pull, pending-state
+recovery, and Git conflict resolution against a real Overleaf session.
+For authentication changes, validate both webdriver authentication and
+Firefox cookie import when possible.
+
+* Acknowledgements
+
+~overleaf-project~ was inspired by
+[[https://github.com/vale981/overleaf.el][vale981/overleaf.el]], but it uses a project-wide Git snapshot workflow
+instead of single-buffer live editing.
+
+* License
+
+~overleaf-project~ is distributed under the terms of the GNU General
+Public License, version 3 or later.  See [[file:LICENSE][LICENSE]].
