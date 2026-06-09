@@ -98,6 +98,30 @@ Set this to nil to let curl run without a package-level request timeout."
                  (const :tag "No package timeout" nil))
   :group 'overleaf-project)
 
+(defcustom overleaf-project-curl-download-max-time nil
+  "Maximum seconds to allow one Overleaf project zip download to run.
+Set this to nil to avoid a total transfer timeout for project downloads.
+Downloads still use `overleaf-project-curl-connect-timeout' and the
+low-speed timeout settings."
+  :type '(choice (integer :tag "Seconds")
+                 (const :tag "No package timeout" nil))
+  :group 'overleaf-project)
+
+(defcustom overleaf-project-curl-download-speed-limit 1024
+  "Minimum bytes per second expected during project zip downloads.
+When this and `overleaf-project-curl-download-speed-time' are non-nil,
+curl aborts downloads that stay below this speed for that many seconds."
+  :type '(choice (integer :tag "Bytes per second")
+                 (const :tag "Disable low-speed timeout" nil))
+  :group 'overleaf-project)
+
+(defcustom overleaf-project-curl-download-speed-time 30
+  "Seconds a project zip download may remain below the low-speed limit.
+See `overleaf-project-curl-download-speed-limit'."
+  :type '(choice (integer :tag "Seconds")
+                 (const :tag "Disable low-speed timeout" nil))
+  :group 'overleaf-project)
+
 (defcustom overleaf-project-unzip-executable "unzip"
   "Unzip executable used to unpack downloaded projects."
   :type 'string

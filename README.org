@@ -492,7 +492,10 @@ Important user options include:
 | ~overleaf-project-local-backup-ref-prefix~ | Ref namespace for local safety refs. |
 | ~overleaf-project-socket-timeout~ | Timeout for websocket project tree fetches. |
 | ~overleaf-project-curl-connect-timeout~ | Maximum time allowed for curl connection setup. |
-| ~overleaf-project-curl-max-time~ | Maximum time allowed for curl requests. |
+| ~overleaf-project-curl-max-time~ | Maximum time allowed for non-download curl requests. |
+| ~overleaf-project-curl-download-max-time~ | Maximum time allowed for project zip downloads; nil by default. |
+| ~overleaf-project-curl-download-speed-limit~ | Low-speed threshold for project zip downloads. |
+| ~overleaf-project-curl-download-speed-time~ | Seconds below the low-speed threshold before aborting a download. |
 | ~overleaf-project-git-executable~ | Git executable path. |
 | ~overleaf-project-curl-executable~ | Curl executable path. |
 | ~overleaf-project-unzip-executable~ | Unzip executable path. |

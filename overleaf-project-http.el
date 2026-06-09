@@ -115,11 +115,33 @@ If REFRESH is non-nil, bypass the cached token and fetch a fresh one."
      (list "--max-time"
            (number-to-string overleaf-project-curl-max-time)))))
 
+(defun overleaf-project--curl-download-timeout-args ()
+  "Return timeout arguments for project zip downloads."
+  (append
+   (when overleaf-project-curl-connect-timeout
+     (list "--connect-timeout"
+           (number-to-string overleaf-project-curl-connect-timeout)))
+   (when overleaf-project-curl-download-max-time
+     (list "--max-time"
+           (number-to-string overleaf-project-curl-download-max-time)))
+   (when (and overleaf-project-curl-download-speed-limit
+              overleaf-project-curl-download-speed-time)
+     (list "--speed-limit"
+           (number-to-string overleaf-project-curl-download-speed-limit)
+           "--speed-time"
+           (number-to-string overleaf-project-curl-download-speed-time)))))
+
 (defun overleaf-project--curl-base-args ()
   "Return common arguments shared by Overleaf curl commands."
   (append
    '("--fail" "--silent" "--show-error" "--location")
    (overleaf-project--curl-timeout-args)))
+
+(defun overleaf-project--curl-download-base-args ()
+  "Return common arguments shared by Overleaf project zip downloads."
+  (append
+   '("--fail" "--silent" "--show-error" "--location")
+   (overleaf-project--curl-download-timeout-args)))
 
 (defun overleaf-project--socket-cookies ()
   "Return cookies suitable for websocket access."
@@ -143,7 +165,7 @@ If REFRESH is non-nil, bypass the cached token and fetch a fresh one."
 (defun overleaf-project--curl-download-args (url output-file headers)
   "Return curl argument list to download URL into OUTPUT-FILE with HEADERS."
   (append
-   (overleaf-project--curl-base-args)
+   (overleaf-project--curl-download-base-args)
    (apply #'append (mapcar (lambda (h) (list "-H" h)) headers))
    (list "--output" output-file url)))
 

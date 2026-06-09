@@ -450,7 +450,10 @@ hook 会在 push 运行期间阻塞 Emacs。启用 ~overleaf-project-enable-asyn
 | ~overleaf-project-local-backup-ref-prefix~ | 本地安全 refs 使用的 ref namespace。 |
 | ~overleaf-project-socket-timeout~ | websocket 获取项目树的超时时间。 |
 | ~overleaf-project-curl-connect-timeout~ | curl 建立连接允许的最长时间。 |
-| ~overleaf-project-curl-max-time~ | curl 请求允许的最长时间。 |
+| ~overleaf-project-curl-max-time~ | 非下载 curl 请求允许的最长时间。 |
+| ~overleaf-project-curl-download-max-time~ | 项目 zip 下载允许的最长时间，默认为 nil。 |
+| ~overleaf-project-curl-download-speed-limit~ | 项目 zip 下载的低速阈值。 |
+| ~overleaf-project-curl-download-speed-time~ | 下载低于低速阈值多久后中止。 |
 | ~overleaf-project-git-executable~ | Git 可执行文件路径。 |
 | ~overleaf-project-curl-executable~ | Curl 可执行文件路径。 |
 | ~overleaf-project-unzip-executable~ | Unzip 可执行文件路径。 |
