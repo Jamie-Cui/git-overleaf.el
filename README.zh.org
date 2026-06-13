@@ -53,23 +53,21 @@ Emacs 构建支持 SQLite。
 
 * 安装
 
-** 包归档
+** VC 包安装
 
-如果通过 MELPA 等 package archive 安装，可使用 Emacs 的包管理器：
-
-#+begin_example
-M-x package-refresh-contents RET
-M-x package-install RET overleaf-project RET
-#+end_example
-
-使用 =use-package=：
+~overleaf-project~ 目前尚未发布到 MELPA。可使用 =use-package= 直接从
+Git 仓库安装：
 
 #+begin_src elisp
   (use-package overleaf-project
-    :ensure t
-    :custom
-    (overleaf-project-url "https://www.overleaf.com"))
+    :vc (:url "https://github.com/Jamie-Cui/overleaf-project" :rev "main"))
 #+end_src
+
+如果不使用 =use-package=，可直接调用 Emacs 的包管理器：
+
+#+begin_example
+M-x package-vc-install RET https://github.com/Jamie-Cui/overleaf-project.git RET
+#+end_example
 
 如果使用自建 Overleaf 实例，请在使用交互命令前设置服务器地址：
 

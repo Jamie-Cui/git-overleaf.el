@@ -64,24 +64,21 @@ SQLite support.
 
 * Installation
 
-** Package archives
+** VC package install
 
-When installing from a package archive such as MELPA, use Emacs'
-package manager:
-
-#+begin_example
-M-x package-refresh-contents RET
-M-x package-install RET overleaf-project RET
-#+end_example
-
-With =use-package=:
+~overleaf-project~ is not yet available from MELPA.  Install it
+directly from the Git repository with =use-package=:
 
 #+begin_src elisp
   (use-package overleaf-project
-    :ensure t
-    :custom
-    (overleaf-project-url "https://www.overleaf.com"))
+    :vc (:url "https://github.com/Jamie-Cui/overleaf-project" :rev "main"))
 #+end_src
+
+Without =use-package=, use Emacs' package manager directly:
+
+#+begin_example
+M-x package-vc-install RET https://github.com/Jamie-Cui/overleaf-project.git RET
+#+end_example
 
 For a self-hosted Overleaf instance, set the server URL before using the
 interactive commands:
