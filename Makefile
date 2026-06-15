@@ -4,21 +4,21 @@ COVERAGE_MIN ?= 0
 PACKAGE_INIT = (progn (setq load-prefer-newer t) (require 'package) (package-initialize) (add-to-list 'load-path default-directory))
 EMACS_BATCH = $(EMACS) -Q --batch -L . --eval "$(PACKAGE_INIT)"
 MODULE_ELC_FILES = \
-	overleaf-project-log.elc \
-	overleaf-project-core.elc \
-	overleaf-project-http.elc \
-	overleaf-project-sync.elc \
-	overleaf-project-firefox.elc \
-	overleaf-project-auth.elc
-ELC_FILES = $(MODULE_ELC_FILES) overleaf-project.elc overleaf-project-magit.elc
+	git-overleaf-log.elc \
+	git-overleaf-core.elc \
+	git-overleaf-http.elc \
+	git-overleaf-sync.elc \
+	git-overleaf-firefox.elc \
+	git-overleaf-auth.elc
+ELC_FILES = $(MODULE_ELC_FILES) git-overleaf.elc git-overleaf-magit.elc
 TEST_FILES = \
-	test/overleaf-project-test.el \
-	test/overleaf-project-git-test.el \
-	test/overleaf-project-sync-tree-test.el \
-	test/overleaf-project-command-test.el \
-	test/overleaf-project-http-auth-test.el \
-	test/overleaf-project-async-test.el \
-	test/overleaf-project-magit-test.el
+	test/git-overleaf-test.el \
+	test/git-overleaf-git-test.el \
+	test/git-overleaf-sync-tree-test.el \
+	test/git-overleaf-command-test.el \
+	test/git-overleaf-http-auth-test.el \
+	test/git-overleaf-async-test.el \
+	test/git-overleaf-magit-test.el
 
 .PHONY: all compile test coverage help clean
 
@@ -31,32 +31,32 @@ test:
 
 coverage:
 	$(EMACS_BATCH) \
-		--eval "(setq overleaf-project-coverage-directory \"$(COVERAGE_DIR)\" overleaf-project-coverage-min $(COVERAGE_MIN))" \
+		--eval "(setq git-overleaf-coverage-directory \"$(COVERAGE_DIR)\" git-overleaf-coverage-min $(COVERAGE_MIN))" \
 		-l test/coverage.el
 
-overleaf-project-log.elc: overleaf-project-log.el
-	$(EMACS_BATCH) -f batch-byte-compile overleaf-project-log.el
+git-overleaf-log.elc: git-overleaf-log.el
+	$(EMACS_BATCH) -f batch-byte-compile git-overleaf-log.el
 
-overleaf-project-core.elc: overleaf-project-core.el overleaf-project-log.elc
-	$(EMACS_BATCH) -f batch-byte-compile overleaf-project-core.el
+git-overleaf-core.elc: git-overleaf-core.el git-overleaf-log.elc
+	$(EMACS_BATCH) -f batch-byte-compile git-overleaf-core.el
 
-overleaf-project-http.elc: overleaf-project-http.el overleaf-project-core.elc
-	$(EMACS_BATCH) -f batch-byte-compile overleaf-project-http.el
+git-overleaf-http.elc: git-overleaf-http.el git-overleaf-core.elc
+	$(EMACS_BATCH) -f batch-byte-compile git-overleaf-http.el
 
-overleaf-project-sync.elc: overleaf-project-sync.el overleaf-project-core.elc overleaf-project-http.elc
-	$(EMACS_BATCH) -f batch-byte-compile overleaf-project-sync.el
+git-overleaf-sync.elc: git-overleaf-sync.el git-overleaf-core.elc git-overleaf-http.elc
+	$(EMACS_BATCH) -f batch-byte-compile git-overleaf-sync.el
 
-overleaf-project-firefox.elc: overleaf-project-firefox.el overleaf-project-core.elc
-	$(EMACS_BATCH) -f batch-byte-compile overleaf-project-firefox.el
+git-overleaf-firefox.elc: git-overleaf-firefox.el git-overleaf-core.elc
+	$(EMACS_BATCH) -f batch-byte-compile git-overleaf-firefox.el
 
-overleaf-project-auth.elc: overleaf-project-auth.el overleaf-project-core.elc overleaf-project-http.elc overleaf-project-firefox.elc
-	$(EMACS_BATCH) -f batch-byte-compile overleaf-project-auth.el
+git-overleaf-auth.elc: git-overleaf-auth.el git-overleaf-core.elc git-overleaf-http.elc git-overleaf-firefox.elc
+	$(EMACS_BATCH) -f batch-byte-compile git-overleaf-auth.el
 
-overleaf-project.elc: overleaf-project.el $(MODULE_ELC_FILES)
-	$(EMACS_BATCH) -f batch-byte-compile overleaf-project.el
+git-overleaf.elc: git-overleaf.el $(MODULE_ELC_FILES)
+	$(EMACS_BATCH) -f batch-byte-compile git-overleaf.el
 
-overleaf-project-magit.elc: overleaf-project-magit.el overleaf-project.elc
-	$(EMACS_BATCH) -f batch-byte-compile overleaf-project-magit.el
+git-overleaf-magit.elc: git-overleaf-magit.el git-overleaf.elc
+	$(EMACS_BATCH) -f batch-byte-compile git-overleaf-magit.el
 
 help:
 	@printf '%s\n' \

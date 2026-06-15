@@ -1,7 +1,8 @@
-;;; overleaf-project-core.el --- Core helpers for overleaf-project -*- lexical-binding: t; -*-
+;;; git-overleaf-core.el --- Core helpers for git-overleaf -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2020-2026 Jamie Cui
 ;; Author: Jamie Cui <jamie.cui@outlook.com>
+;; URL: https://github.com/Jamie-Cui/git-overleaf
 ;; Assisted-by: Codex:GPT-5.5
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; This file is not part of GNU Emacs.
@@ -14,15 +15,15 @@
 
 (require 'auth-source)
 (require 'cl-lib)
-(require 'overleaf-project-log)
+(require 'git-overleaf-log)
 (require 'subr-x)
 (require 'url-parse)
 
-(declare-function overleaf-project-authenticate "overleaf-project-auth")
+(declare-function git-overleaf-authenticate "git-overleaf-auth")
 
 ;;;; Variables
 
-(defcustom overleaf-project-cookie-storage 'authinfo
+(defcustom git-overleaf-cookie-storage 'authinfo
   "Where Overleaf cookies should be persisted across Emacs sessions.
 
 If the value is the symbol `authinfo', cookies are stored in the first
@@ -38,9 +39,9 @@ current Emacs session."
           (const :tag "Emacs auth-source file" authinfo)
           (file :tag "Plain file")
           (const :tag "Session only" nil))
-  :group 'overleaf-project)
+  :group 'git-overleaf)
 
-(defcustom overleaf-project-cookies #'overleaf-project--load-configured-cookies
+(defcustom git-overleaf-cookies #'git-overleaf--load-configured-cookies
   "The Overleaf session cookies.
 
 Can either be:
@@ -49,160 +50,160 @@ Can either be:
 - a string containing either that serialized alist or a raw Cookie header
 - a function returning one of those values
 
-The default value follows `overleaf-project-cookie-storage'.  Override this
+The default value follows `git-overleaf-cookie-storage'.  Override this
 variable directly only when you want to supply cookies manually or use a
 custom loader.
 
 The cookies are usually obtained and refreshed via
-`overleaf-project-authenticate'."
+`git-overleaf-authenticate'."
   :type '(choice sexp string function)
-  :group 'overleaf-project)
+  :group 'git-overleaf)
 
 
-(defcustom overleaf-project-url "https://www.overleaf.com"
+(defcustom git-overleaf-url "https://www.overleaf.com"
   "The URL of the Overleaf server."
   :type 'string
-  :group 'overleaf-project)
+  :group 'git-overleaf)
 
-(defcustom overleaf-project-auth-backend 'webdriver
-  "Backend used by `overleaf-project-authenticate' to obtain cookies."
+(defcustom git-overleaf-auth-backend 'webdriver
+  "Backend used by `git-overleaf-authenticate' to obtain cookies."
   :type '(choice
           (const :tag "Selenium webdriver" webdriver)
           (const :tag "Import from Firefox profile" firefox-cookies))
-  :group 'overleaf-project)
+  :group 'git-overleaf)
 
-(defcustom overleaf-project-git-executable "git"
+(defcustom git-overleaf-git-executable "git"
   "Git executable used for project operations."
   :type 'string
-  :group 'overleaf-project)
+  :group 'git-overleaf)
 
-(defcustom overleaf-project-curl-executable "curl"
+(defcustom git-overleaf-curl-executable "curl"
   "Curl executable used for project download and upload."
   :type 'string
-  :group 'overleaf-project)
+  :group 'git-overleaf)
 
-(defconst overleaf-project--curl-connect-timeout 10
+(defconst git-overleaf--curl-connect-timeout 10
   "Seconds to wait while establishing Overleaf curl connections.")
 
-(defconst overleaf-project--curl-max-time 45
+(defconst git-overleaf--curl-max-time 45
   "Maximum seconds to allow one non-download Overleaf curl request to run.")
 
-(defconst overleaf-project--curl-download-max-time nil
+(defconst git-overleaf--curl-download-max-time nil
   "Maximum seconds to allow one Overleaf project zip download to run.")
 
-(defconst overleaf-project--curl-download-speed-limit 1024
+(defconst git-overleaf--curl-download-speed-limit 1024
   "Minimum bytes per second expected during project zip downloads.")
 
-(defconst overleaf-project--curl-download-speed-time 30
+(defconst git-overleaf--curl-download-speed-time 30
   "Seconds a project zip download may remain below the low-speed limit.")
 
-(defcustom overleaf-project-unzip-executable "unzip"
+(defcustom git-overleaf-unzip-executable "unzip"
   "Unzip executable used to unpack downloaded projects."
   :type 'string
-  :group 'overleaf-project)
+  :group 'git-overleaf)
 
-(defcustom overleaf-project-base-ref "refs/overleaf-project/base"
+(defcustom git-overleaf-base-ref "refs/git-overleaf/base"
   "Git ref that stores the last successfully synchronized snapshot."
   :type 'string
-  :group 'overleaf-project)
+  :group 'git-overleaf)
 
-(defcustom overleaf-project-sync-metadata-enabled t
+(defcustom git-overleaf-sync-metadata-enabled t
   "Whether to maintain a remote Overleaf sync metadata file.
 
-When enabled, push commands upload `overleaf-project-sync-metadata-file'
+When enabled, push commands upload `git-overleaf-sync-metadata-file'
 to the Overleaf project root.  Downloaded snapshots read and remove that
 file before Git comparisons, so it acts as remote bookkeeping rather
 than project content."
   :type 'boolean
-  :group 'overleaf-project)
+  :group 'git-overleaf)
 
-(defcustom overleaf-project-sync-metadata-file ".overleaf-project-sync.json"
+(defcustom git-overleaf-sync-metadata-file ".git-overleaf-sync.json"
   "Root-level Overleaf file used to remember the last uploaded Git commit.
 
-This file name is reserved by `overleaf-project' when
-`overleaf-project-sync-metadata-enabled' is non-nil.  It is stored on the
+This file name is reserved by `git-overleaf' when
+`git-overleaf-sync-metadata-enabled' is non-nil.  It is stored on the
 Overleaf remote, but should not be tracked by the local Git repository."
   :type 'string
-  :group 'overleaf-project)
+  :group 'git-overleaf)
 
-(defcustom overleaf-project-local-backups-enabled t
+(defcustom git-overleaf-local-backups-enabled t
   "Whether to create local backup refs before mutating Overleaf sync steps.
 
 When enabled, operations that may move the current branch or complete a
 pending sync first create refs under
-`overleaf-project-local-backup-ref-prefix'.  These refs keep the previous
+`git-overleaf-local-backup-ref-prefix'.  These refs keep the previous
 local commits reachable even if a later merge, fast-forward, or branch
 update does not produce the expected result."
   :type 'boolean
-  :group 'overleaf-project)
+  :group 'git-overleaf)
 
-(defcustom overleaf-project-local-backup-ref-prefix "refs/overleaf-project/backups"
+(defcustom git-overleaf-local-backup-ref-prefix "refs/git-overleaf/backups"
   "Git ref namespace used for local Overleaf safety backups."
   :type 'string
-  :group 'overleaf-project)
+  :group 'git-overleaf)
 
-(defcustom overleaf-project-socket-timeout 15
+(defcustom git-overleaf-socket-timeout 15
   "Seconds to wait for the Overleaf project tree websocket response."
   :type 'integer
-  :group 'overleaf-project)
+  :group 'git-overleaf)
 
-(defcustom overleaf-project-sync-auto-commit-message
+(defcustom git-overleaf-sync-auto-commit-message
   "chore: checkpoint before Overleaf push"
-  "Commit message used when `overleaf-project-push' auto-commits changes."
+  "Commit message used when `git-overleaf-push' auto-commits changes."
   :type 'string
-  :group 'overleaf-project)
+  :group 'git-overleaf)
 
-(defcustom overleaf-project-enable-async nil
+(defcustom git-overleaf-enable-async nil
   "Whether Overleaf commands may run long operations in the background.
 
 When nil, commands run synchronously by default.
 
-When non-nil, interactive commands such as `overleaf-project-clone',
-`overleaf-project-push', and `overleaf-project-pull' collect necessary
+When non-nil, interactive commands such as `git-overleaf-clone',
+`git-overleaf-push', and `git-overleaf-pull' collect necessary
 user input in the foreground, then run network, unzip, and Git work on a
 background Emacs thread.  Hook-driven pushes may also run in the
 background.  Lisp callers that invoke these commands noninteractively
 keep the synchronous behavior unless documented otherwise."
   :type 'boolean
-  :group 'overleaf-project)
+  :group 'git-overleaf)
 
-(defcustom overleaf-project-auth-session-cookie-regexp
+(defcustom git-overleaf-auth-session-cookie-regexp
   "\\`\\(?:overleaf_session[[:alnum:]_]*\\|sharelatex_session[[:alnum:]_]*\\|sharelatex\\.sid\\|connect\\.sid\\|sessionid\\|session\\)\\'"
   "Regexp matching cookie names that represent the authenticated session.
 
-This is used only for local expiry checks after `overleaf-project-authenticate'.
+This is used only for local expiry checks after `git-overleaf-authenticate'.
 Short-lived analytics or load-balancer cookies are intentionally ignored,
 because their expiry is often much earlier than the actual login session."
   :type 'regexp
-  :group 'overleaf-project)
+  :group 'git-overleaf)
 
-(defvar overleaf-project-save-cookies #'overleaf-project--save-configured-cookies
+(defvar git-overleaf-save-cookies #'git-overleaf--save-configured-cookies
   "Function storing a freshly authenticated cookie string.
 
 The function receives a string containing the session cookies and stores
-them in a way that `overleaf-project-cookies' can later access.
+them in a way that `git-overleaf-cookies' can later access.
 
-The default implementation follows `overleaf-project-cookie-storage'.  Override
+The default implementation follows `git-overleaf-cookie-storage'.  Override
 this variable directly only when you want custom persistence logic.")
 
-(defvar overleaf-project--current-cookies nil
-  "Cached cookie alist returned from `overleaf-project-cookies'.")
+(defvar git-overleaf--current-cookies nil
+  "Cached cookie alist returned from `git-overleaf-cookies'.")
 
-(defvar overleaf-project--csrf-cache (make-hash-table :test #'equal)
+(defvar git-overleaf--csrf-cache (make-hash-table :test #'equal)
   "Cache of csrf tokens keyed by \"URL|PROJECT-ID\".")
 
-(defvar overleaf-project--remote-sync-metadata nil
+(defvar git-overleaf--remote-sync-metadata nil
   "Sync metadata extracted from the currently downloaded remote snapshot.")
 
-(defvar overleaf-project--remote-sync-metadata-text nil
+(defvar git-overleaf--remote-sync-metadata-text nil
   "Raw sync metadata text extracted from the current remote snapshot.")
 
-(cl-defstruct overleaf-project--command-result
+(cl-defstruct git-overleaf--command-result
   "Result of an external command."
   status
   output)
 
-(cl-defstruct overleaf-project--entity
+(cl-defstruct git-overleaf--entity
   "A remote Overleaf project entity."
   path
   name
@@ -210,19 +211,19 @@ this variable directly only when you want custom persistence logic.")
   type
   parent-id)
 
-(cl-defstruct overleaf-project--snapshot
+(cl-defstruct git-overleaf--snapshot
   "A downloaded Overleaf project snapshot."
   temp-dir
   root)
 
-(cl-defstruct overleaf-project--repo-status
+(cl-defstruct git-overleaf--repo-status
   "Parsed `git status --porcelain' state."
   lines
   staged
   unstaged
   unmerged)
 
-(cl-defstruct overleaf-project--async-completion
+(cl-defstruct git-overleaf--async-completion
   "Completed background Overleaf operation."
   task-id
   name
@@ -233,12 +234,12 @@ this variable directly only when you want custom persistence logic.")
   on-success
   on-error
   default-directory
-  overleaf-project-url
+  git-overleaf-url
   log-context)
 
 ;;;; Async helpers
 
-(cl-defstruct overleaf-project--async-task
+(cl-defstruct git-overleaf--async-task
   "Running background Overleaf operation."
   id
   name
@@ -247,125 +248,125 @@ this variable directly only when you want custom persistence logic.")
   processes
   canceled)
 
-(defvar overleaf-project--async-locks (make-hash-table :test #'equal)
+(defvar git-overleaf--async-locks (make-hash-table :test #'equal)
   "Background operation locks keyed by repository or task identity.")
 
-(defvar overleaf-project--async-tasks (make-hash-table :test #'eql)
+(defvar git-overleaf--async-tasks (make-hash-table :test #'eql)
   "Running background operations keyed by internal task id.")
 
-(defvar overleaf-project--async-canceled-task-ids (make-hash-table :test #'eql)
+(defvar git-overleaf--async-canceled-task-ids (make-hash-table :test #'eql)
   "Ids of canceled background operations that may still unwind later.")
 
-(defvar overleaf-project--async-next-task-id 0
+(defvar git-overleaf--async-next-task-id 0
   "Last internal id assigned to a background operation.")
 
-(defvar overleaf-project--async-completions nil
+(defvar git-overleaf--async-completions nil
   "Completed background operations waiting for foreground callbacks.")
 
-(defvar overleaf-project--async-current-task-id nil
+(defvar git-overleaf--async-current-task-id nil
   "Internal id of the background operation running in this thread.")
 
-(defvar overleaf-project--async-mutex
+(defvar git-overleaf--async-mutex
   (and (fboundp 'make-mutex)
-       (make-mutex "overleaf-project-async"))
-  "Mutex protecting `overleaf-project--async-completions'.")
+       (make-mutex "git-overleaf-async"))
+  "Mutex protecting `git-overleaf--async-completions'.")
 
-(defvar overleaf-project--async-timer nil
+(defvar git-overleaf--async-timer nil
   "Timer that drains completed background operations.")
 
-(defmacro overleaf-project--with-async-mutex (&rest body)
+(defmacro git-overleaf--with-async-mutex (&rest body)
   "Run BODY while holding the async completion mutex."
   (declare (indent 0) (debug t))
-  `(if overleaf-project--async-mutex
+  `(if git-overleaf--async-mutex
        (progn
-         (mutex-lock overleaf-project--async-mutex)
+         (mutex-lock git-overleaf--async-mutex)
          (unwind-protect
              (progn ,@body)
-           (mutex-unlock overleaf-project--async-mutex)))
+           (mutex-unlock git-overleaf--async-mutex)))
      ,@body))
 
-(defun overleaf-project--async-supported-p ()
+(defun git-overleaf--async-supported-p ()
   "Return non-nil if background Emacs threads are available."
   (fboundp 'make-thread))
 
-(defun overleaf-project--async-enabled-p ()
+(defun git-overleaf--async-enabled-p ()
   "Return non-nil when Overleaf operations may start background work."
-  (and overleaf-project-enable-async
+  (and git-overleaf-enable-async
        (not noninteractive)
-       (overleaf-project--async-supported-p)))
+       (git-overleaf--async-supported-p)))
 
-(defun overleaf-project--async-next-task-id ()
+(defun git-overleaf--async-next-task-id ()
   "Return the next internal async task id."
-  (setq overleaf-project--async-next-task-id
-        (1+ overleaf-project--async-next-task-id)))
+  (setq git-overleaf--async-next-task-id
+        (1+ git-overleaf--async-next-task-id)))
 
-(defun overleaf-project--async-lock-empty-p ()
+(defun git-overleaf--async-lock-empty-p ()
   "Return non-nil if there are no active async locks."
   (let ((empty t))
     (maphash (lambda (_key _value)
                (setq empty nil))
-             overleaf-project--async-locks)
+             git-overleaf--async-locks)
     empty))
 
-(defun overleaf-project--async-task-empty-p ()
+(defun git-overleaf--async-task-empty-p ()
   "Return non-nil if there are no tracked async tasks."
   (let ((empty t))
     (maphash (lambda (_key _value)
                (setq empty nil))
-             overleaf-project--async-tasks)
+             git-overleaf--async-tasks)
     empty))
 
-(defun overleaf-project--async-live-task-p (task)
+(defun git-overleaf--async-live-task-p (task)
   "Return non-nil if TASK still has live work."
-  (or (and (overleaf-project--async-task-thread task)
-           (thread-live-p (overleaf-project--async-task-thread task)))
+  (or (and (git-overleaf--async-task-thread task)
+           (thread-live-p (git-overleaf--async-task-thread task)))
       (cl-some (lambda (process)
                  (and (processp process)
                       (process-live-p process)))
-               (overleaf-project--async-task-processes task))))
+               (git-overleaf--async-task-processes task))))
 
-(defun overleaf-project--async-register-task (task)
+(defun git-overleaf--async-register-task (task)
   "Register TASK as running background work."
-  (puthash (overleaf-project--async-task-id task)
+  (puthash (git-overleaf--async-task-id task)
            task
-           overleaf-project--async-tasks))
+           git-overleaf--async-tasks))
 
-(defun overleaf-project--async-remove-task (task-id)
+(defun git-overleaf--async-remove-task (task-id)
   "Remove TASK-ID from running background work."
-  (remhash task-id overleaf-project--async-tasks))
+  (remhash task-id git-overleaf--async-tasks))
 
-(defun overleaf-project--async-current-task ()
+(defun git-overleaf--async-current-task ()
   "Return the task currently running in this thread, or nil."
-  (and overleaf-project--async-current-task-id
-       (gethash overleaf-project--async-current-task-id
-                overleaf-project--async-tasks)))
+  (and git-overleaf--async-current-task-id
+       (gethash git-overleaf--async-current-task-id
+                git-overleaf--async-tasks)))
 
-(defun overleaf-project--async-current-task-canceled-p ()
+(defun git-overleaf--async-current-task-canceled-p ()
   "Return non-nil if the current background task has been canceled."
-  (or (and overleaf-project--async-current-task-id
-           (gethash overleaf-project--async-current-task-id
-                    overleaf-project--async-canceled-task-ids))
-      (when-let* ((task (overleaf-project--async-current-task)))
-        (overleaf-project--async-task-canceled task))))
+  (or (and git-overleaf--async-current-task-id
+           (gethash git-overleaf--async-current-task-id
+                    git-overleaf--async-canceled-task-ids))
+      (when-let* ((task (git-overleaf--async-current-task)))
+        (git-overleaf--async-task-canceled task))))
 
-(defun overleaf-project--async-register-process (process)
+(defun git-overleaf--async-register-process (process)
   "Register PROCESS under the current background task."
   (when-let* (((processp process))
-              (task (overleaf-project--async-current-task)))
-    (push process (overleaf-project--async-task-processes task)))
+              (task (git-overleaf--async-current-task)))
+    (push process (git-overleaf--async-task-processes task)))
   process)
 
-(defun overleaf-project--async-unregister-process (process)
+(defun git-overleaf--async-unregister-process (process)
   "Unregister PROCESS from the current background task."
   (when-let* (((processp process))
-              (task (overleaf-project--async-current-task)))
-    (setf (overleaf-project--async-task-processes task)
-          (delq process (overleaf-project--async-task-processes task)))))
+              (task (git-overleaf--async-current-task)))
+    (setf (git-overleaf--async-task-processes task)
+          (delq process (git-overleaf--async-task-processes task)))))
 
-(defun overleaf-project--async-cancel-task (task)
+(defun git-overleaf--async-cancel-task (task)
   "Cancel TASK and any external processes it started."
-  (setf (overleaf-project--async-task-canceled task) t)
-  (dolist (process (overleaf-project--async-task-processes task))
+  (setf (git-overleaf--async-task-canceled task) t)
+  (dolist (process (git-overleaf--async-task-processes task))
     (when (and (processp process)
                (process-live-p process))
       (ignore-errors (interrupt-process process))
@@ -373,125 +374,125 @@ this variable directly only when you want custom persistence logic.")
         (ignore-errors (kill-process process)))
       (when (process-live-p process)
         (ignore-errors (delete-process process)))))
-  (when-let* ((thread (overleaf-project--async-task-thread task)))
+  (when-let* ((thread (git-overleaf--async-task-thread task)))
     (when (and (thread-live-p thread)
                (not (eq thread (current-thread))))
       (ignore-errors
         (thread-signal thread
                        'quit
                        (list (format "Canceled %s"
-                                     (overleaf-project--async-task-name task))))))))
+                                     (git-overleaf--async-task-name task))))))))
 
-(defun overleaf-project--async-cancel-completion-p (completion)
+(defun git-overleaf--async-cancel-completion-p (completion)
   "Return non-nil if COMPLETION belongs to a canceled task."
-  (when-let* ((task-id (overleaf-project--async-completion-task-id completion)))
-    (let ((task (gethash task-id overleaf-project--async-tasks))
-          (canceled (gethash task-id overleaf-project--async-canceled-task-ids)))
+  (when-let* ((task-id (git-overleaf--async-completion-task-id completion)))
+    (let ((task (gethash task-id git-overleaf--async-tasks))
+          (canceled (gethash task-id git-overleaf--async-canceled-task-ids)))
       (prog1 (or canceled
-                 (and task (overleaf-project--async-task-canceled task)))
-        (overleaf-project--async-remove-task task-id)
-        (remhash task-id overleaf-project--async-canceled-task-ids)))))
+                 (and task (git-overleaf--async-task-canceled task)))
+        (git-overleaf--async-remove-task task-id)
+        (remhash task-id git-overleaf--async-canceled-task-ids)))))
 
-(defun overleaf-project--async-ensure-timer ()
+(defun git-overleaf--async-ensure-timer ()
   "Ensure the async completion drain timer is running."
-  (unless (timerp overleaf-project--async-timer)
-    (setq overleaf-project--async-timer
-          (run-at-time 0.1 0.1 #'overleaf-project--async-drain-completions))))
+  (unless (timerp git-overleaf--async-timer)
+    (setq git-overleaf--async-timer
+          (run-at-time 0.1 0.1 #'git-overleaf--async-drain-completions))))
 
-(defun overleaf-project--async-stop-timer-if-idle ()
+(defun git-overleaf--async-stop-timer-if-idle ()
   "Stop the async completion timer when no background work remains."
-  (when (and (timerp overleaf-project--async-timer)
-             (null overleaf-project--async-completions)
-             (overleaf-project--async-lock-empty-p)
-             (overleaf-project--async-task-empty-p))
-    (cancel-timer overleaf-project--async-timer)
-    (setq overleaf-project--async-timer nil)))
+  (when (and (timerp git-overleaf--async-timer)
+             (null git-overleaf--async-completions)
+             (git-overleaf--async-lock-empty-p)
+             (git-overleaf--async-task-empty-p))
+    (cancel-timer git-overleaf--async-timer)
+    (setq git-overleaf--async-timer nil)))
 
-(defun overleaf-project--async-push-completion (completion)
+(defun git-overleaf--async-push-completion (completion)
   "Queue COMPLETION for foreground handling."
-  (overleaf-project--with-async-mutex
-    (push completion overleaf-project--async-completions)))
+  (git-overleaf--with-async-mutex
+    (push completion git-overleaf--async-completions)))
 
-(defun overleaf-project--async-pop-completions ()
+(defun git-overleaf--async-pop-completions ()
   "Return queued async completions in completion order."
-  (overleaf-project--with-async-mutex
-    (prog1 (nreverse overleaf-project--async-completions)
-      (setq overleaf-project--async-completions nil))))
+  (git-overleaf--with-async-mutex
+    (prog1 (nreverse git-overleaf--async-completions)
+      (setq git-overleaf--async-completions nil))))
 
-(defun overleaf-project--async-drain-completions ()
+(defun git-overleaf--async-drain-completions ()
   "Run foreground callbacks for completed async operations."
-  (dolist (completion (overleaf-project--async-pop-completions))
-    (unless (overleaf-project--async-cancel-completion-p completion)
-      (let ((key (overleaf-project--async-completion-key completion)))
+  (dolist (completion (git-overleaf--async-pop-completions))
+    (unless (git-overleaf--async-cancel-completion-p completion)
+      (let ((key (git-overleaf--async-completion-key completion)))
         (when key
-          (remhash key overleaf-project--async-locks)))
+          (remhash key git-overleaf--async-locks)))
       (let ((default-directory
-             (or (overleaf-project--async-completion-default-directory completion)
+             (or (git-overleaf--async-completion-default-directory completion)
                  default-directory))
-            (overleaf-project-url
-             (or (overleaf-project--async-completion-overleaf-project-url completion)
-                 overleaf-project-url))
-            (overleaf-project-log-context
-             (or (overleaf-project--async-completion-log-context completion)
-                 overleaf-project-log-context)))
+            (git-overleaf-url
+             (or (git-overleaf--async-completion-git-overleaf-url completion)
+                 git-overleaf-url))
+            (git-overleaf-log-context
+             (or (git-overleaf--async-completion-log-context completion)
+                 git-overleaf-log-context)))
         (condition-case err
-            (pcase (overleaf-project--async-completion-status completion)
+            (pcase (git-overleaf--async-completion-status completion)
               ('success
                (if-let* ((callback
-                          (overleaf-project--async-completion-on-success completion)))
+                          (git-overleaf--async-completion-on-success completion)))
                    (funcall callback
-                            (overleaf-project--async-completion-value completion))
-                 (overleaf-project--message "Finished %s"
-					                        (overleaf-project--async-completion-name
+                            (git-overleaf--async-completion-value completion))
+                 (git-overleaf--message "Finished %s"
+					                        (git-overleaf--async-completion-name
 					                         completion))))
               ('error
                (let ((message
-                      (overleaf-project--async-completion-error completion)))
+                      (git-overleaf--async-completion-error completion)))
                  (if-let* ((callback
-                            (overleaf-project--async-completion-on-error completion)))
+                            (git-overleaf--async-completion-on-error completion)))
                      (funcall callback message)
-                   (overleaf-project--warn "%s failed: %s"
-					                       (overleaf-project--async-completion-name completion)
+                   (git-overleaf--warn "%s failed: %s"
+					                       (git-overleaf--async-completion-name completion)
 					                       message)))))
           (error
-           (overleaf-project--warn "%s callback failed: %s"
-				                   (overleaf-project--async-completion-name completion)
+           (git-overleaf--warn "%s callback failed: %s"
+				                   (git-overleaf--async-completion-name completion)
 				                   (error-message-string err)))))))
-  (overleaf-project--async-stop-timer-if-idle))
+  (git-overleaf--async-stop-timer-if-idle))
 
-(defun overleaf-project--force-stop ()
+(defun git-overleaf--force-stop ()
   "Stop all running background Overleaf operations."
   (let ((tasks nil))
     (maphash (lambda (_id task)
                (push task tasks))
-             overleaf-project--async-tasks)
+             git-overleaf--async-tasks)
     (unless tasks
       (user-error "No Overleaf background operation is running"))
     (dolist (task tasks)
-      (let ((task-id (overleaf-project--async-task-id task)))
-        (puthash task-id t overleaf-project--async-canceled-task-ids)
-        (overleaf-project--async-cancel-task task)
-        (unless (overleaf-project--async-live-task-p task)
-          (remhash task-id overleaf-project--async-canceled-task-ids))))
-    (clrhash overleaf-project--async-locks)
-    (clrhash overleaf-project--async-tasks)
-    (setq overleaf-project--async-completions nil)
-    (when (timerp overleaf-project--async-timer)
-      (cancel-timer overleaf-project--async-timer)
-      (setq overleaf-project--async-timer nil))
-    (overleaf-project--message
+      (let ((task-id (git-overleaf--async-task-id task)))
+        (puthash task-id t git-overleaf--async-canceled-task-ids)
+        (git-overleaf--async-cancel-task task)
+        (unless (git-overleaf--async-live-task-p task)
+          (remhash task-id git-overleaf--async-canceled-task-ids))))
+    (clrhash git-overleaf--async-locks)
+    (clrhash git-overleaf--async-tasks)
+    (setq git-overleaf--async-completions nil)
+    (when (timerp git-overleaf--async-timer)
+      (cancel-timer git-overleaf--async-timer)
+      (setq git-overleaf--async-timer nil))
+    (git-overleaf--message
      "Stopped %d Overleaf background operation%s"
      (length tasks)
      (if (= (length tasks) 1) "" "s"))))
 
-(cl-defun overleaf-project--async-start
+(cl-defun git-overleaf--async-start
     (name function &key key on-success on-error quiet)
   "Run FUNCTION as background operation NAME.
 
 When KEY is non-nil, only one operation with that key may run at a
 time.  ON-SUCCESS receives FUNCTION's return value in the foreground.
 ON-ERROR receives an error message string in the foreground."
-  (if (not (overleaf-project--async-enabled-p))
+  (if (not (git-overleaf--async-enabled-p))
       (condition-case err
           (let ((value (funcall function)))
             (when on-success
@@ -502,40 +503,40 @@ ON-ERROR receives an error message string in the foreground."
            (if on-error
                (funcall on-error message)
              (signal (car err) (cdr err))))))
-    (when (and key (gethash key overleaf-project--async-locks))
+    (when (and key (gethash key git-overleaf--async-locks))
       (user-error "Overleaf operation already running: %s"
-                  (gethash key overleaf-project--async-locks)))
+                  (gethash key git-overleaf--async-locks)))
     (when key
-      (puthash key name overleaf-project--async-locks))
-    (let* ((task-id (overleaf-project--async-next-task-id))
-           (task (make-overleaf-project--async-task
+      (puthash key name git-overleaf--async-locks))
+    (let* ((task-id (git-overleaf--async-next-task-id))
+           (task (make-git-overleaf--async-task
                   :id task-id
                   :name name
                   :key key))
            (captured-default-directory default-directory)
-           (captured-overleaf-project-url overleaf-project-url)
-           (captured-current-cookies overleaf-project--current-cookies)
-           (captured-log-context (overleaf-project-log-current-context))
+           (captured-git-overleaf-url git-overleaf-url)
+           (captured-current-cookies git-overleaf--current-cookies)
+           (captured-log-context (git-overleaf-log-current-context))
            (captured-process-environment process-environment))
-      (overleaf-project--async-ensure-timer)
+      (git-overleaf--async-ensure-timer)
       (unless quiet
-        (overleaf-project--message "Started %s in background" name))
-      (overleaf-project--async-register-task task)
-      (setf (overleaf-project--async-task-thread task)
+        (git-overleaf--message "Started %s in background" name))
+      (git-overleaf--async-register-task task)
+      (setf (git-overleaf--async-task-thread task)
             (make-thread
              (lambda ()
                (let ((default-directory captured-default-directory)
-                     (overleaf-project-url captured-overleaf-project-url)
-                     (overleaf-project--current-cookies captured-current-cookies)
-                     (overleaf-project-log-context captured-log-context)
+                     (git-overleaf-url captured-git-overleaf-url)
+                     (git-overleaf--current-cookies captured-current-cookies)
+                     (git-overleaf-log-context captured-log-context)
                      (process-environment captured-process-environment)
-                     (overleaf-project--async-current-task-id task-id))
+                     (git-overleaf--async-current-task-id task-id))
                  (unwind-protect
                      (condition-case err
                          (let ((value (funcall function)))
-                           (unless (overleaf-project--async-current-task-canceled-p)
-                             (overleaf-project--async-push-completion
-                              (make-overleaf-project--async-completion
+                           (unless (git-overleaf--async-current-task-canceled-p)
+                             (git-overleaf--async-push-completion
+                              (make-git-overleaf--async-completion
                                :task-id task-id
                                :name name
                                :key key
@@ -544,13 +545,13 @@ ON-ERROR receives an error message string in the foreground."
                                :on-success on-success
                                :on-error on-error
                                :default-directory captured-default-directory
-                               :overleaf-project-url captured-overleaf-project-url
+                               :git-overleaf-url captured-git-overleaf-url
                                :log-context captured-log-context))))
                        (quit nil)
                        (error
-                        (unless (overleaf-project--async-current-task-canceled-p)
-                          (overleaf-project--async-push-completion
-                           (make-overleaf-project--async-completion
+                        (unless (git-overleaf--async-current-task-canceled-p)
+                          (git-overleaf--async-push-completion
+                           (make-git-overleaf--async-completion
                             :task-id task-id
                             :name name
                             :key key
@@ -559,29 +560,29 @@ ON-ERROR receives an error message string in the foreground."
                             :on-success on-success
                             :on-error on-error
                             :default-directory captured-default-directory
-                            :overleaf-project-url captured-overleaf-project-url
+                            :git-overleaf-url captured-git-overleaf-url
                             :log-context captured-log-context)))))
-                   (when (overleaf-project--async-current-task-canceled-p)
-                     (remhash task-id overleaf-project--async-canceled-task-ids)
-                     (overleaf-project--async-remove-task task-id)))))
+                   (when (git-overleaf--async-current-task-canceled-p)
+                     (remhash task-id git-overleaf--async-canceled-task-ids)
+                     (git-overleaf--async-remove-task task-id)))))
              name))
       task)))
 
 ;;;; Cookie helpers
 
-(defconst overleaf-project--authinfo-default-source "~/.authinfo"
+(defconst git-overleaf--authinfo-default-source "~/.authinfo"
   "Fallback authinfo file used by Overleaf cookie helpers.")
 
-(defconst overleaf-project--authinfo-default-user "overleaf-project"
+(defconst git-overleaf--authinfo-default-user "git-overleaf"
   "Default authinfo login used for Overleaf cookie helpers.")
 
-(defconst overleaf-project--authinfo-default-port "overleaf-project-cookie"
+(defconst git-overleaf--authinfo-default-port "git-overleaf-cookie"
   "Default authinfo port used for Overleaf cookie helpers.")
 
-(defconst overleaf-project--authinfo-record-marker "overleaf-project-cookie-record"
+(defconst git-overleaf--authinfo-record-marker "git-overleaf-cookie-record"
   "Marker key used for authinfo entries managed by this package.")
 
-(defun overleaf-project--authinfo-source-file (&optional source)
+(defun git-overleaf--authinfo-source-file (&optional source)
   "Return the expanded authinfo SOURCE file path."
   (expand-file-name
    (or source
@@ -591,90 +592,90 @@ ON-ERROR receives an error message string in the foreground."
                (not (string-match-p "\\.gpg\\'" entry))
                entry))
         auth-sources)
-       overleaf-project--authinfo-default-source)))
+       git-overleaf--authinfo-default-source)))
 
-(defun overleaf-project--authinfo-resolve-host (&optional host)
+(defun git-overleaf--authinfo-resolve-host (&optional host)
   "Return the authinfo host key for HOST or the current Overleaf host."
-  (downcase (or host (overleaf-project--url-host))))
+  (downcase (or host (git-overleaf--url-host))))
 
-(defun overleaf-project--authinfo-resolve-user (&optional user)
+(defun git-overleaf--authinfo-resolve-user (&optional user)
   "Return the authinfo login key for USER."
-  (or user overleaf-project--authinfo-default-user))
+  (or user git-overleaf--authinfo-default-user))
 
-(defun overleaf-project--authinfo-resolve-port (&optional port)
+(defun git-overleaf--authinfo-resolve-port (&optional port)
   "Return the authinfo port key for PORT."
-  (or port overleaf-project--authinfo-default-port))
+  (or port git-overleaf--authinfo-default-port))
 
-(defun overleaf-project--authinfo-format-value (value)
+(defun git-overleaf--authinfo-format-value (value)
   "Return VALUE formatted as one authinfo token."
   (if (string-match-p "[[:space:]\"#]" value)
       (format "%S" value)
     value))
 
-(defun overleaf-project--authinfo-format-field (name value)
+(defun git-overleaf--authinfo-format-field (name value)
   "Return one authinfo field string for NAME and VALUE."
-  (format "%s %s" name (overleaf-project--authinfo-format-value value)))
+  (format "%s %s" name (git-overleaf--authinfo-format-value value)))
 
-(defun overleaf-project--authinfo-encode-secret (secret)
+(defun git-overleaf--authinfo-encode-secret (secret)
   "Encode serialized cookie SECRET for authinfo storage."
   (base64-encode-string secret t))
 
-(defun overleaf-project--authinfo-decode-secret (secret)
+(defun git-overleaf--authinfo-decode-secret (secret)
   "Decode serialized cookie SECRET loaded from authinfo."
   (condition-case nil
       (base64-decode-string secret)
     (error secret)))
 
-(defun overleaf-project--authinfo-entry-line (host user port secret)
+(defun git-overleaf--authinfo-entry-line (host user port secret)
   "Return one authinfo line storing SECRET for HOST, USER, and PORT."
   (string-join
-   (list (overleaf-project--authinfo-format-field "machine" host)
-         (overleaf-project--authinfo-format-field "login" user)
-         (overleaf-project--authinfo-format-field "port" port)
-         (overleaf-project--authinfo-format-field
+   (list (git-overleaf--authinfo-format-field "machine" host)
+         (git-overleaf--authinfo-format-field "login" user)
+         (git-overleaf--authinfo-format-field "port" port)
+         (git-overleaf--authinfo-format-field
           "password"
-          (overleaf-project--authinfo-encode-secret secret))
-         (overleaf-project--authinfo-format-field overleaf-project--authinfo-record-marker "t"))
+          (git-overleaf--authinfo-encode-secret secret))
+         (git-overleaf--authinfo-format-field git-overleaf--authinfo-record-marker "t"))
    " "))
 
-(defun overleaf-project--authinfo-entry-regexp (host user port)
+(defun git-overleaf--authinfo-entry-regexp (host user port)
   "Return a regexp matching a managed authinfo entry.
 HOST, USER, and PORT are the authinfo machine, login, and port values
 to match."
   (format "^machine %s login %s port %s password .* %s t$"
-          (regexp-quote (overleaf-project--authinfo-format-value host))
-          (regexp-quote (overleaf-project--authinfo-format-value user))
-          (regexp-quote (overleaf-project--authinfo-format-value port))
-          (regexp-quote overleaf-project--authinfo-record-marker)))
+          (regexp-quote (git-overleaf--authinfo-format-value host))
+          (regexp-quote (git-overleaf--authinfo-format-value user))
+          (regexp-quote (git-overleaf--authinfo-format-value port))
+          (regexp-quote git-overleaf--authinfo-record-marker)))
 
-(defun overleaf-project--authinfo-read-secret (source host user port)
+(defun git-overleaf--authinfo-read-secret (source host user port)
   "Read the Overleaf cookie secret from authinfo SOURCE.
 HOST, USER, and PORT identify the machine, login, and port entry to
 read."
-  (let ((file (overleaf-project--authinfo-source-file source)))
+  (let ((file (git-overleaf--authinfo-source-file source)))
     (when (file-readable-p file)
       (let* ((auth-sources (list file))
              (entry (car (auth-source-search
                           :max 1
-                          :host (overleaf-project--authinfo-resolve-host host)
-                          :user (overleaf-project--authinfo-resolve-user user)
-                          :port (overleaf-project--authinfo-resolve-port port)
+                          :host (git-overleaf--authinfo-resolve-host host)
+                          :user (git-overleaf--authinfo-resolve-user user)
+                          :port (git-overleaf--authinfo-resolve-port port)
                           :require '(:secret)))))
         (when entry
-          (overleaf-project--authinfo-decode-secret
+          (git-overleaf--authinfo-decode-secret
            (auth-info-password entry)))))))
 
-(defun overleaf-project--authinfo-write-secret (source host user port secret)
+(defun git-overleaf--authinfo-write-secret (source host user port secret)
   "Write SECRET to authinfo SOURCE for HOST, USER, and PORT."
-  (let* ((file (overleaf-project--authinfo-source-file source))
-         (resolved-host (overleaf-project--authinfo-resolve-host host))
-         (resolved-user (overleaf-project--authinfo-resolve-user user))
-         (resolved-port (overleaf-project--authinfo-resolve-port port))
-         (regexp (overleaf-project--authinfo-entry-regexp
+  (let* ((file (git-overleaf--authinfo-source-file source))
+         (resolved-host (git-overleaf--authinfo-resolve-host host))
+         (resolved-user (git-overleaf--authinfo-resolve-user user))
+         (resolved-port (git-overleaf--authinfo-resolve-port port))
+         (regexp (git-overleaf--authinfo-entry-regexp
                   resolved-host
                   resolved-user
                   resolved-port))
-         (line (overleaf-project--authinfo-entry-line
+         (line (git-overleaf--authinfo-entry-line
                 resolved-host
                 resolved-user
                 resolved-port
@@ -692,28 +693,28 @@ read."
     (set-file-modes file #o600)
     (auth-source-forget+ :host resolved-host :user resolved-user :port resolved-port)))
 
-(defun overleaf-project--load-configured-cookies ()
-  "Load cookies according to `overleaf-project-cookie-storage'."
-  (pcase overleaf-project-cookie-storage
+(defun git-overleaf--load-configured-cookies ()
+  "Load cookies according to `git-overleaf-cookie-storage'."
+  (pcase git-overleaf-cookie-storage
     ('authinfo
-     (overleaf-project--authinfo-read-secret nil nil nil nil))
+     (git-overleaf--authinfo-read-secret nil nil nil nil))
     ((pred stringp)
      (with-temp-buffer
-       (insert-file-contents (expand-file-name overleaf-project-cookie-storage))
+       (insert-file-contents (expand-file-name git-overleaf-cookie-storage))
        (read (string-trim (buffer-string)))))
     (_ nil)))
 
-(defun overleaf-project--save-configured-cookies (cookies)
-  "Persist COOKIES according to `overleaf-project-cookie-storage'."
-  (pcase overleaf-project-cookie-storage
+(defun git-overleaf--save-configured-cookies (cookies)
+  "Persist COOKIES according to `git-overleaf-cookie-storage'."
+  (pcase git-overleaf-cookie-storage
     ('authinfo
-     (overleaf-project--authinfo-write-secret nil nil nil nil cookies))
+     (git-overleaf--authinfo-write-secret nil nil nil nil cookies))
     ((pred stringp)
-     (with-temp-file (expand-file-name overleaf-project-cookie-storage)
+     (with-temp-file (expand-file-name git-overleaf-cookie-storage)
        (insert cookies)))
     (_ nil)))
 
-(defun overleaf-project--normalize-cookie-entry (entry)
+(defun git-overleaf--normalize-cookie-entry (entry)
   "Normalize one cookie ENTRY into `(DOMAIN COOKIE-STRING EXPIRY)'."
   (pcase entry
     (`(,domain ,cookie-string ,expiry)
@@ -729,7 +730,7 @@ read."
     (_
      (error "Invalid Overleaf cookie entry: %S" entry))))
 
-(defun overleaf-project--normalize-full-cookies (cookies)
+(defun git-overleaf--normalize-full-cookies (cookies)
   "Return a normalized cookie alist from COOKIES."
   (cond
    ((null cookies) nil)
@@ -739,50 +740,50 @@ read."
        ((string-empty-p trimmed) nil)
        ((string-prefix-p "(" trimmed)
         (condition-case err
-            (overleaf-project--normalize-full-cookies
+            (git-overleaf--normalize-full-cookies
              (car (read-from-string trimmed)))
           (error
            (error "Could not parse serialized Overleaf cookies: %s"
                   (error-message-string err)))))
        (t
-        (list (list (overleaf-project--cookie-domain) trimmed nil))))))
+        (list (list (git-overleaf--cookie-domain) trimmed nil))))))
    ((listp cookies)
-    (mapcar #'overleaf-project--normalize-cookie-entry cookies))
+    (mapcar #'git-overleaf--normalize-cookie-entry cookies))
    (t
-    (error "Unsupported value for `overleaf-project-cookies': %S" cookies))))
+    (error "Unsupported value for `git-overleaf-cookies': %S" cookies))))
 
-(defun overleaf-project--get-full-cookies ()
+(defun git-overleaf--get-full-cookies ()
   "Load the association list mapping domains to cookies."
-  (if overleaf-project--current-cookies
-      overleaf-project--current-cookies
+  (if git-overleaf--current-cookies
+      git-overleaf--current-cookies
     (condition-case err
-        (setq overleaf-project--current-cookies
-              (overleaf-project--normalize-full-cookies
-               (if (functionp overleaf-project-cookies)
-                   (funcall overleaf-project-cookies)
-                 overleaf-project-cookies)))
+        (setq git-overleaf--current-cookies
+              (git-overleaf--normalize-full-cookies
+               (if (functionp git-overleaf-cookies)
+                   (funcall git-overleaf-cookies)
+                 git-overleaf-cookies)))
       (error
-       (overleaf-project--warn "Error while loading cookies: %s"
+       (git-overleaf--warn "Error while loading cookies: %s"
 			                   (error-message-string err))
        nil))))
 
-(defun overleaf-project--get-cookies ()
-  "Load cookies from `overleaf-project-cookies'."
-  (let ((state (overleaf-project--cookie-state)))
+(defun git-overleaf--get-cookies ()
+  "Load cookies from `git-overleaf-cookies'."
+  (let ((state (git-overleaf--cookie-state)))
     (pcase (plist-get state :status)
       ('valid
        (plist-get state :value))
       ('expired
        (user-error
-        "Cookies for %s are expired.  Refresh them with `overleaf-project-authenticate' or manually"
-        (overleaf-project--url-host)))
+        "Cookies for %s are expired.  Refresh them with `git-overleaf-authenticate' or manually"
+        (git-overleaf--url-host)))
       (_
        (user-error
-        "Cookies for %s are not set.  Configure them with `overleaf-project-authenticate' or manually"
-        (overleaf-project--url-host))))))
+        "Cookies for %s are not set.  Configure them with `git-overleaf-authenticate' or manually"
+        (git-overleaf--url-host))))))
 
-(defun overleaf-project--cookie-state ()
-  "Return the local cookie state for the current `overleaf-project-url'.
+(defun git-overleaf--cookie-state ()
+  "Return the local cookie state for the current `git-overleaf-url'.
 The result is a plist with `:status' set to one of `valid',
 `missing', or `expired'.  For `valid', `:value' contains the cookie
 header string.  This only inspects locally available cookie data and
@@ -792,25 +793,25 @@ does not contact the Overleaf server."
            (lambda (domain)
              (alist-get
               domain
-              (overleaf-project--get-full-cookies)
+              (git-overleaf--get-full-cookies)
               nil
               nil
               #'string=))
-           (overleaf-project--cookie-key-candidates)))
+           (git-overleaf--cookie-key-candidates)))
          (now (time-convert nil 'integer)))
     (if entry
         (pcase-let ((`(,value ,validity) entry))
           (if (or (not validity) (< now validity))
               `(:status valid :value ,value :validity ,validity)
-            (setq overleaf-project--current-cookies nil)
+            (setq git-overleaf--current-cookies nil)
             `(:status expired :validity ,validity)))
-      (setq overleaf-project--current-cookies nil)
+      (setq git-overleaf--current-cookies nil)
       '(:status missing))))
 
-(defun overleaf-project--authentication-needed-reason (&optional state)
+(defun git-overleaf--authentication-needed-reason (&optional state)
   "Return a user-facing reason when cookie STATE is not valid."
-  (let* ((host (overleaf-project--url-host))
-         (status (plist-get (or state (overleaf-project--cookie-state)) :status)))
+  (let* ((host (git-overleaf--url-host))
+         (status (plist-get (or state (git-overleaf--cookie-state)) :status)))
     (pcase status
       ('expired
        (format
@@ -820,34 +821,34 @@ does not contact the Overleaf server."
        (format "Cookies for %s are not set locally." host))
       (_ nil))))
 
-(defun overleaf-project--ensure-authenticated (&optional op-desc)
-  "Ensure the current `overleaf-project-url' has usable cookies before OP-DESC.
+(defun git-overleaf--ensure-authenticated (&optional op-desc)
+  "Ensure the current `git-overleaf-url' has usable cookies before OP-DESC.
 OP-DESC is a user-facing operation description used in authentication
 error messages.
 If cookies are missing or expired, ask in the minibuffer whether to run
-`overleaf-project-authenticate' immediately."
-  (let* ((state (overleaf-project--cookie-state))
+`git-overleaf-authenticate' immediately."
+  (let* ((state (git-overleaf--cookie-state))
          (status (plist-get state :status))
-         (reason (overleaf-project--authentication-needed-reason state)))
+         (reason (git-overleaf--authentication-needed-reason state)))
     (if (eq status 'valid)
         t
       (if (or noninteractive
               (not
                (let ((use-dialog-box nil))
                  (y-or-n-p
-                  (format "%s Re-run `overleaf-project-authenticate` now? "
+                  (format "%s Re-run `git-overleaf-authenticate` now? "
                           reason)))))
           (user-error
-           "%s Run `overleaf-project-authenticate` before %s"
+           "%s Run `git-overleaf-authenticate` before %s"
            reason
            (or op-desc "continuing"))
-        (overleaf-project-authenticate overleaf-project-url)
-        (overleaf-project--get-cookies)
+        (git-overleaf-authenticate git-overleaf-url)
+        (git-overleaf--get-cookies)
         t))))
 
 ;;;; Generic helpers
 
-(defun overleaf-project--pget (plist &rest keys)
+(defun git-overleaf--pget (plist &rest keys)
   "Recursively follow KEYS inside PLIST."
   (while keys
     (let ((key (pop keys)))
@@ -857,7 +858,7 @@ If cookies are missing or expired, ask in the minibuffer whether to run
               (plist-get plist key)))))
   plist)
 
-(defun overleaf-project--completing-read (prompt collection &optional padding)
+(defun git-overleaf--completing-read (prompt collection &optional padding)
   "Perform a completing read with PROMPT over COLLECTION.
 
 COLLECTION is a list of plists with the shape
@@ -891,24 +892,24 @@ PADDING is the minimum number of spaces between display fields."
       (completing-read prompt final-collection nil t)
       final-collection))))
 
-(defun overleaf-project--url ()
+(defun git-overleaf--url ()
   "Return a sanitized Overleaf URL without a trailing slash."
-  (string-trim (string-trim overleaf-project-url) "" "/"))
+  (string-trim (string-trim git-overleaf-url) "" "/"))
 
-(defun overleaf-project--url-host ()
-  "Return the normalized host part of `overleaf-project-url'."
-  (let ((host (url-host (url-generic-parse-url (overleaf-project--url)))))
+(defun git-overleaf--url-host ()
+  "Return the normalized host part of `git-overleaf-url'."
+  (let ((host (url-host (url-generic-parse-url (git-overleaf--url)))))
     (unless host
-      (user-error "Invalid Overleaf URL: %s" (overleaf-project--url)))
+      (user-error "Invalid Overleaf URL: %s" (git-overleaf--url)))
     (downcase host)))
 
-(defun overleaf-project--cookie-domain ()
-  "Return the cookie domain for the current `overleaf-project-url'."
-  (overleaf-project--url-host))
+(defun git-overleaf--cookie-domain ()
+  "Return the cookie domain for the current `git-overleaf-url'."
+  (git-overleaf--url-host))
 
-(defun overleaf-project--cookie-key-candidates ()
-  "Return candidate cookie keys for the current `overleaf-project-url'."
-  (let* ((host (overleaf-project--url-host))
+(defun git-overleaf--cookie-key-candidates ()
+  "Return candidate cookie keys for the current `git-overleaf-url'."
+  (let* ((host (git-overleaf--url-host))
          (labels (string-split host "\\."))
          (candidates (list host (concat "." host))))
     ;; Keep parent-domain lookups for older saved cookie formats.
@@ -919,11 +920,11 @@ PADDING is the minimum number of spaces between display fields."
               (append candidates (list suffix (concat "." suffix))))))
     (delete-dups candidates)))
 
-(defun overleaf-project--project-page-url (project-id)
+(defun git-overleaf--project-page-url (project-id)
   "Return the project page URL for PROJECT-ID."
-  (format "%s/project/%s" (overleaf-project--url) project-id))
+  (format "%s/project/%s" (git-overleaf--url) project-id))
 
-(defun overleaf-project--sanitize-name (name)
+(defun git-overleaf--sanitize-name (name)
   "Turn NAME into a filesystem-friendly directory name."
   (let ((sanitized
          (replace-regexp-in-string
@@ -935,23 +936,23 @@ PADDING is the minimum number of spaces between display fields."
            (downcase (string-trim name))))))
     (string-trim sanitized "-" "-")))
 
-(defun overleaf-project--ensure-executable (program)
+(defun git-overleaf--ensure-executable (program)
   "Return PROGRAM if it is executable, otherwise signal an error."
   (or (executable-find program)
       (user-error "Required executable `%s' was not found" program)))
 
-(defconst overleaf-project--sensitive-header-regexp
+(defconst git-overleaf--sensitive-header-regexp
   "\\`\\(?:Cookie\\|Authorization\\|X-Csrf-Token\\):[[:space:]]*"
   "Regexp matching command header arguments that should not be logged.")
 
-(defun overleaf-project--redact-sensitive-argument (arg)
+(defun git-overleaf--redact-sensitive-argument (arg)
   "Return ARG with sensitive command data redacted."
   (if (and (stringp arg)
-           (string-match overleaf-project--sensitive-header-regexp arg))
+           (string-match git-overleaf--sensitive-header-regexp arg))
       (concat (match-string 0 arg) "<redacted>")
     arg))
 
-(defun overleaf-project--redact-command-args (args)
+(defun git-overleaf--redact-command-args (args)
   "Return ARGS with sensitive values redacted for display."
   (let ((remaining args)
         (redacted nil))
@@ -963,11 +964,11 @@ PADDING is the minimum number of spaces between display fields."
           (let ((value (pop remaining)))
             (push (if (member arg '("-b" "--cookie"))
                       "<redacted>"
-                    (overleaf-project--redact-sensitive-argument value))
+                    (git-overleaf--redact-sensitive-argument value))
                   redacted)))))
-    (nreverse (mapcar #'overleaf-project--redact-sensitive-argument redacted))))
+    (nreverse (mapcar #'git-overleaf--redact-sensitive-argument redacted))))
 
-(defun overleaf-project--redact-sensitive-text (text)
+(defun git-overleaf--redact-sensitive-text (text)
   "Return TEXT with sensitive HTTP header values redacted."
   (when text
     (replace-regexp-in-string
@@ -977,18 +978,18 @@ PADDING is the minimum number of spaces between display fields."
      nil
      nil)))
 
-(defun overleaf-project--command-error-message (program args output)
+(defun git-overleaf--command-error-message (program args output)
   "Return a safe error message for PROGRAM ARGS and command OUTPUT."
   (format "%s %s failed: %s"
           program
-          (string-join (overleaf-project--redact-command-args args) " ")
+          (string-join (git-overleaf--redact-command-args args) " ")
           (let ((safe-output
-                 (overleaf-project--redact-sensitive-text output)))
+                 (git-overleaf--redact-sensitive-text output)))
             (if (or (null safe-output) (string-empty-p safe-output))
                 "unknown error"
               safe-output))))
 
-(defun overleaf-project--command-result-or-error
+(defun git-overleaf--command-result-or-error
     (program args status output noerror)
   "Return a command result or signal a safe command error.
 PROGRAM and ARGS describe the command.  STATUS and OUTPUT are its exit
@@ -996,28 +997,28 @@ status and captured output.  When NOERROR is non-nil, return a result
 even for non-zero exits."
   (unless (or noerror (and (integerp status) (zerop status)))
     (error "%s"
-           (overleaf-project--command-error-message
+           (git-overleaf--command-error-message
             program
             args
             output)))
-  (make-overleaf-project--command-result
+  (make-git-overleaf--command-result
    :status status
    :output output))
 
-(defun overleaf-project--background-thread-p ()
+(defun git-overleaf--background-thread-p ()
   "Return non-nil when running outside Emacs' main thread."
   (and (fboundp 'current-thread)
        (boundp 'main-thread)
        (not (eq (current-thread) main-thread))))
 
-(defun overleaf-project--run-async-wait
+(defun git-overleaf--run-async-wait
     (program args directory env noerror)
   "Run PROGRAM with ARGS asynchronously and wait from a worker thread.
 DIRECTORY, ENV, and NOERROR have the same meaning as in
-`overleaf-project--run'."
+`git-overleaf--run'."
   (let* ((default-directory (or directory default-directory))
          (process-environment (append env process-environment))
-         (mutex (make-mutex "overleaf-project-command"))
+         (mutex (make-mutex "git-overleaf-command"))
          (process nil)
          (done nil)
          (status nil)
@@ -1029,7 +1030,7 @@ DIRECTORY, ENV, and NOERROR have the same meaning as in
          (progn
            (setq process
                  (make-process
-                  :name "overleaf-project-command"
+                  :name "git-overleaf-command"
                   :buffer nil
                   :command (cons program args)
                   :connection-type 'pipe
@@ -1049,7 +1050,7 @@ DIRECTORY, ENV, and NOERROR have the same meaning as in
                             (setq status (process-exit-status proc))
                             (setq done t))
                         (mutex-unlock mutex))))))
-           (overleaf-project--async-register-process process)
+           (git-overleaf--async-register-process process)
            (while (not done)
              (accept-process-output process 0.05)
              (thread-yield))
@@ -1060,7 +1061,7 @@ DIRECTORY, ENV, and NOERROR have the same meaning as in
                        (string-trim-right
                         (apply #'concat (nreverse output-chunks))))
                (mutex-unlock mutex))
-             (overleaf-project--command-result-or-error
+             (git-overleaf--command-result-or-error
               program
               args
               status
@@ -1069,19 +1070,19 @@ DIRECTORY, ENV, and NOERROR have the same meaning as in
       (when (and process (process-live-p process))
         (ignore-errors (delete-process process)))
       (when process
-        (overleaf-project--async-unregister-process process)))
+        (git-overleaf--async-unregister-process process)))
     result))
 
-(defun overleaf-project--run (program args &optional directory env noerror)
+(defun git-overleaf--run (program args &optional directory env noerror)
   "Run PROGRAM with ARGS in DIRECTORY and optional ENV.
-Return an `overleaf-project--command-result'.  Signal an error unless
+Return an `git-overleaf--command-result'.  Signal an error unless
 NOERROR is non-nil."
-  (when (overleaf-project--async-current-task-canceled-p)
+  (when (git-overleaf--async-current-task-canceled-p)
     (signal 'quit (list "Overleaf background operation was canceled")))
-  (let ((program (overleaf-project--ensure-executable program)))
-    (if (and (overleaf-project--background-thread-p)
+  (let ((program (git-overleaf--ensure-executable program)))
+    (if (and (git-overleaf--background-thread-p)
              (fboundp 'make-mutex))
-        (overleaf-project--run-async-wait
+        (git-overleaf--run-async-wait
          program
          args
          directory
@@ -1093,60 +1094,60 @@ NOERROR is non-nil."
           (let ((status (apply #'process-file program nil (current-buffer) nil args))
                 (output nil))
             (setq output (string-trim-right (buffer-string)))
-            (overleaf-project--command-result-or-error
+            (git-overleaf--command-result-or-error
              program
              args
              status
              output
              noerror)))))))
 
-(defun overleaf-project--git-run (repo args &optional env noerror)
+(defun git-overleaf--git-run (repo args &optional env noerror)
   "Run Git with ARGS in REPO and return a command result.
 ENV is prepended to `process-environment'.  If NOERROR is non-nil, do
 not signal on non-zero exit status."
-  (overleaf-project--run overleaf-project-git-executable args repo env noerror))
+  (git-overleaf--run git-overleaf-git-executable args repo env noerror))
 
-(defun overleaf-project--git-output (repo &rest args)
+(defun git-overleaf--git-output (repo &rest args)
   "Run Git with ARGS in REPO and return trimmed stdout."
-  (overleaf-project--command-result-output
-   (overleaf-project--git-run repo args)))
+  (git-overleaf--command-result-output
+   (git-overleaf--git-run repo args)))
 
-(defun overleaf-project--git-output-noerror (repo &rest args)
+(defun git-overleaf--git-output-noerror (repo &rest args)
   "Run Git with ARGS in REPO and return stdout, or nil on failure."
-  (let ((result (overleaf-project--git-run repo args nil t)))
-    (when (and (integerp (overleaf-project--command-result-status result))
-               (zerop (overleaf-project--command-result-status result)))
-      (overleaf-project--command-result-output result))))
+  (let ((result (git-overleaf--git-run repo args nil t)))
+    (when (and (integerp (git-overleaf--command-result-status result))
+               (zerop (git-overleaf--command-result-status result)))
+      (git-overleaf--command-result-output result))))
 
-(defun overleaf-project-root (&optional directory)
+(defun git-overleaf-root (&optional directory)
   "Return the Git toplevel for DIRECTORY, or nil if none exists."
-  (overleaf-project--git-output-noerror
+  (git-overleaf--git-output-noerror
    (or directory default-directory)
    "rev-parse" "--show-toplevel"))
 
-(defun overleaf-project--require-repo (&optional directory)
+(defun git-overleaf--require-repo (&optional directory)
   "Return the Git toplevel for DIRECTORY, or signal a user error."
-  (or (and directory (overleaf-project-root directory))
-      (overleaf-project-root default-directory)
+  (or (and directory (git-overleaf-root directory))
+      (git-overleaf-root default-directory)
       (user-error "Not inside a Git repository")))
 
-(defun overleaf-project--require-managed-repo (&optional directory)
+(defun git-overleaf--require-managed-repo (&optional directory)
   "Return the managed Overleaf Git repo for DIRECTORY, or signal a user error."
-  (let ((repo (overleaf-project--require-repo directory)))
-    (unless (overleaf-project--managed-repo-p repo)
+  (let ((repo (git-overleaf--require-repo directory)))
+    (unless (git-overleaf--managed-repo-p repo)
       (user-error "Repository %s is not configured as an Overleaf project" repo))
     repo))
 
-(defun overleaf-project--set-repo-url (repo &optional url)
-  "Set `overleaf-project-url' from REPO metadata or explicit URL, and return it."
-  (setq overleaf-project-url
+(defun git-overleaf--set-repo-url (repo &optional url)
+  "Set `git-overleaf-url' from REPO metadata or explicit URL, and return it."
+  (setq git-overleaf-url
         (or url
-            (and repo (overleaf-project--git-config-get repo "overleaf-project.url"))
-            (overleaf-project--url))))
+            (and repo (git-overleaf--git-config-get repo "git-overleaf.url"))
+            (git-overleaf--url))))
 
-(defun overleaf-project--read-repo-status (repo)
+(defun git-overleaf--read-repo-status (repo)
   "Return parsed `git status --porcelain' information for REPO."
-  (let* ((output (overleaf-project--git-output repo "status" "--porcelain"))
+  (let* ((output (git-overleaf--git-output repo "status" "--porcelain"))
          (lines (unless (string-empty-p output)
                   (split-string output "\n" t)))
          (staged nil)
@@ -1165,63 +1166,62 @@ not signal on non-zero exit status."
                   (and (not (eq worktree-status ?\s))
                        (not (eq worktree-status ?\?))))
           (setq unstaged t))))
-    (make-overleaf-project--repo-status
+    (make-git-overleaf--repo-status
      :lines lines
      :staged staged
      :unstaged unstaged
      :unmerged unmerged)))
 
-(defun overleaf-project--current-branch (repo)
+(defun git-overleaf--current-branch (repo)
   "Return the current branch name for REPO.
 Signal an error on detached HEAD."
   (let ((branch
-         (overleaf-project--git-output repo "branch" "--show-current")))
+         (git-overleaf--git-output repo "branch" "--show-current")))
     (if (string-empty-p branch)
         (user-error "Detached HEAD is not supported for Overleaf push/pull")
       branch)))
 
-(defun overleaf-project--rev-parse (repo revision)
+(defun git-overleaf--rev-parse (repo revision)
   "Resolve REVISION inside REPO."
-  (overleaf-project--git-output repo "rev-parse" revision))
+  (git-overleaf--git-output repo "rev-parse" revision))
 
-(defun overleaf-project--rev-parse-noerror (repo revision)
+(defun git-overleaf--rev-parse-noerror (repo revision)
   "Resolve REVISION inside REPO, returning nil if it does not exist."
-  (overleaf-project--git-output-noerror repo "rev-parse" "--verify" revision))
+  (git-overleaf--git-output-noerror repo "rev-parse" "--verify" revision))
 
-(defun overleaf-project--tree-id (repo revision)
+(defun git-overleaf--tree-id (repo revision)
   "Return the tree object id for REVISION inside REPO."
-  (overleaf-project--git-output repo "rev-parse" (format "%s^{tree}" revision)))
+  (git-overleaf--git-output repo "rev-parse" (format "%s^{tree}" revision)))
 
-(defun overleaf-project--merge-in-progress-p (repo)
+(defun git-overleaf--merge-in-progress-p (repo)
   "Return non-nil if REPO currently has a merge in progress."
-  (not (null
-        (overleaf-project--rev-parse-noerror repo "MERGE_HEAD"))))
+  (git-overleaf--rev-parse-noerror repo "MERGE_HEAD"))
 
-(defun overleaf-project--is-ancestor-p (repo ancestor descendant)
+(defun git-overleaf--is-ancestor-p (repo ancestor descendant)
   "Return non-nil if ANCESTOR is an ancestor of DESCENDANT in REPO."
   (let ((result
-         (overleaf-project--git-run
+         (git-overleaf--git-run
           repo
           (list "merge-base" "--is-ancestor" ancestor descendant)
           nil
           t)))
-    (and (integerp (overleaf-project--command-result-status result))
-         (zerop (overleaf-project--command-result-status result)))))
+    (and (integerp (git-overleaf--command-result-status result))
+         (zerop (git-overleaf--command-result-status result)))))
 
-(defun overleaf-project--path-depth (path)
+(defun git-overleaf--path-depth (path)
   "Return the slash depth of PATH."
   (if (string-empty-p path)
       0
     (length (split-string path "/" t))))
 
-(defun overleaf-project--parent-path (path)
+(defun git-overleaf--parent-path (path)
   "Return the parent directory path for PATH relative to the repo root."
   (let ((dir (file-name-directory path)))
     (if dir
         (directory-file-name dir)
       "")))
 
-(defun overleaf-project--directory-empty-p (dir)
+(defun git-overleaf--directory-empty-p (dir)
   "Return non-nil if DIR is empty or does not exist."
   (or (not (file-exists-p dir))
       (null
@@ -1230,7 +1230,7 @@ Signal an error on detached HEAD."
           (member name '("." "..")))
         (directory-files dir nil nil t)))))
 
-(defun overleaf-project--copy-directory-contents (source destination)
+(defun git-overleaf--copy-directory-contents (source destination)
   "Copy SOURCE directory contents into DESTINATION."
   (make-directory destination t)
   (dolist (entry (directory-files source t nil t))
@@ -1241,7 +1241,7 @@ Signal an error on detached HEAD."
             (copy-directory entry target t t t)
           (copy-file entry target t t t t))))))
 
-(defun overleaf-project--normalize-extracted-root (directory)
+(defun git-overleaf--normalize-extracted-root (directory)
   "Return the effective project root inside DIRECTORY."
   (let ((entries
          (cl-remove-if
@@ -1253,153 +1253,150 @@ Signal an error on detached HEAD."
         (car entries)
       directory)))
 
-(defun overleaf-project--files-equal-p (left right)
+(defun git-overleaf--files-equal-p (left right)
   "Return non-nil if LEFT and RIGHT have byte-identical contents."
   (and (file-exists-p left)
        (file-exists-p right)
        (= (file-attribute-size (file-attributes left))
           (file-attribute-size (file-attributes right)))
        (let ((result
-              (overleaf-project--run
+              (git-overleaf--run
                "cmp"
                (list "--silent" left right)
                nil
                nil
                t)))
-         (and (integerp (overleaf-project--command-result-status result))
-              (zerop (overleaf-project--command-result-status result))))))
+         (and (integerp (git-overleaf--command-result-status result))
+              (zerop (git-overleaf--command-result-status result))))))
 
 ;;;; Git metadata
 
-(defun overleaf-project--git-config-get (repo key)
+(defun git-overleaf--git-config-get (repo key)
   "Read Git config KEY from REPO."
-  (overleaf-project--git-output-noerror repo "config" "--local" "--get" key))
+  (git-overleaf--git-output-noerror repo "config" "--local" "--get" key))
 
-(defun overleaf-project--git-config-set (repo key value)
+(defun git-overleaf--git-config-set (repo key value)
   "Set Git config KEY to VALUE in REPO."
-  (overleaf-project--git-output repo "config" "--local" key value))
+  (git-overleaf--git-output repo "config" "--local" key value))
 
-(defun overleaf-project--git-config-unset (repo key)
+(defun git-overleaf--git-config-unset (repo key)
   "Unset Git config KEY in REPO."
-  (overleaf-project--git-run
+  (git-overleaf--git-run
    repo
    (list "config" "--local" "--unset-all" key)
    nil
    t))
 
-(defun overleaf-project--set-base-ref (repo revision)
+(defun git-overleaf--set-base-ref (repo revision)
   "Move the Overleaf base ref in REPO to REVISION."
-  (overleaf-project--git-output
+  (git-overleaf--git-output
    repo
    "update-ref"
-   (or (overleaf-project--git-config-get repo "overleaf-project.baseRef")
-       overleaf-project-base-ref)
+   (or (git-overleaf--git-config-get repo "git-overleaf.baseRef")
+       git-overleaf-base-ref)
    revision))
 
-(defun overleaf-project--base-ref (repo)
+(defun git-overleaf--base-ref (repo)
   "Return the configured base ref for REPO."
-  (or (overleaf-project--git-config-get repo "overleaf-project.baseRef")
-      overleaf-project-base-ref))
+  (or (git-overleaf--git-config-get repo "git-overleaf.baseRef")
+      git-overleaf-base-ref))
 
-(defun overleaf-project--project-id (repo)
+(defun git-overleaf--project-id (repo)
   "Return the configured Overleaf project id for REPO."
-  (or (overleaf-project--git-config-get repo "overleaf-project.projectId")
+  (or (git-overleaf--git-config-get repo "git-overleaf.projectId")
       (user-error "Repository %s is not configured as an Overleaf project" repo)))
 
-(defun overleaf-project--project-name (repo)
+(defun git-overleaf--project-name (repo)
   "Return the configured Overleaf project name for REPO."
-  (or (overleaf-project--git-config-get repo "overleaf-project.projectName")
-      (overleaf-project--project-id repo)))
+  (or (git-overleaf--git-config-get repo "git-overleaf.projectName")
+      (git-overleaf--project-id repo)))
 
-(defun overleaf-project--managed-repo-p (repo)
+(defun git-overleaf--managed-repo-p (repo)
   "Return non-nil if REPO stores Overleaf project metadata."
-  (not (null (overleaf-project--git-config-get repo "overleaf-project.projectId"))))
+  (git-overleaf--git-config-get repo "git-overleaf.projectId"))
 
-(defun overleaf-project--write-repo-metadata (repo project)
+(defun git-overleaf--write-repo-metadata (repo project)
   "Persist PROJECT metadata inside REPO."
-  (overleaf-project--git-config-set
-   repo "overleaf-project.projectId" (plist-get project :id))
-  (overleaf-project--git-config-set
-   repo "overleaf-project.projectName" (plist-get project :name))
-  (overleaf-project--git-config-set
-   repo "overleaf-project.url" (overleaf-project--url))
-  (overleaf-project--git-config-set
-   repo "overleaf-project.baseRef" overleaf-project-base-ref))
+  (git-overleaf--git-config-set
+   repo "git-overleaf.projectId" (plist-get project :id))
+  (git-overleaf--git-config-set
+   repo "git-overleaf.projectName" (plist-get project :name))
+  (git-overleaf--git-config-set
+   repo "git-overleaf.url" (git-overleaf--url))
+  (git-overleaf--git-config-set
+   repo "git-overleaf.baseRef" git-overleaf-base-ref))
 
 ;;;; Log context
 
-(defun overleaf-project--log-context-for-repo (&optional repo)
+(defun git-overleaf--log-context-for-repo (&optional repo)
   "Return a log context plist for managed REPO."
   (when repo
-    (overleaf-project-log-make-context
-     :project-id (overleaf-project--git-config-get repo "overleaf-project.projectId")
-     :project-name (overleaf-project--git-config-get repo "overleaf-project.projectName")
+    (git-overleaf-log-make-context
+     :project-id (git-overleaf--git-config-get repo "git-overleaf.projectId")
+     :project-name (git-overleaf--git-config-get repo "git-overleaf.projectName")
      :repo repo
-     :url (or (overleaf-project--git-config-get repo "overleaf-project.url")
-              (overleaf-project--url)))))
+     :url (or (git-overleaf--git-config-get repo "git-overleaf.url")
+              (git-overleaf--url)))))
 
-(defun overleaf-project--log-context-for-project
+(defun git-overleaf--log-context-for-project
     (project &optional repo)
   "Return a log context plist for PROJECT and optional REPO."
-  (overleaf-project-log-make-context
+  (git-overleaf-log-make-context
    :project-id (plist-get project :id)
    :project-name (plist-get project :name)
    :repo repo
-   :url (overleaf-project--url)))
+   :url (git-overleaf--url)))
 
-(defun overleaf-project--log-default-context ()
+(defun git-overleaf--log-default-context ()
   "Return the default Overleaf log context for `default-directory'."
-  (or (when-let* ((repo (ignore-errors (overleaf-project-root default-directory))))
-        (overleaf-project--log-context-for-repo repo))
-      (overleaf-project-log-make-context :url (overleaf-project--url))))
+  (or (when-let* ((repo (ignore-errors (git-overleaf-root default-directory))))
+        (git-overleaf--log-context-for-repo repo))
+      (git-overleaf-log-make-context :url (git-overleaf--url))))
 
-(setq overleaf-project-log-context-function
-      #'overleaf-project--log-default-context)
-
-(defmacro overleaf-project--with-repo-log-context (repo &rest body)
+(defmacro git-overleaf--with-repo-log-context (repo &rest body)
   "Run BODY with REPO metadata as the Overleaf log context."
   (declare (indent 1) (debug (form body)))
-  `(overleaf-project-log-with-context
-       (overleaf-project--log-context-for-repo ,repo)
+  `(git-overleaf-log-with-context
+       (git-overleaf--log-context-for-repo ,repo)
      ,@body))
 
-(defun overleaf-project--clear-pending-state (repo)
+(defun git-overleaf--clear-pending-state (repo)
   "Remove pending pull metadata from REPO."
-  (dolist (key '("overleaf-project.pendingRemoteCommit"
-                 "overleaf-project.pendingAction"))
-    (overleaf-project--git-config-unset repo key)))
+  (dolist (key '("git-overleaf.pendingRemoteCommit"
+                 "git-overleaf.pendingAction"))
+    (git-overleaf--git-config-unset repo key)))
 
-(defun overleaf-project--set-pending-pull-state (repo remote-commit)
+(defun git-overleaf--set-pending-pull-state (repo remote-commit)
   "Persist a pending pull state inside REPO recording REMOTE-COMMIT."
-  (overleaf-project--git-config-set
-   repo "overleaf-project.pendingRemoteCommit" remote-commit)
-  (overleaf-project--git-config-set
-   repo "overleaf-project.pendingAction" "pull"))
+  (git-overleaf--git-config-set
+   repo "git-overleaf.pendingRemoteCommit" remote-commit)
+  (git-overleaf--git-config-set
+   repo "git-overleaf.pendingAction" "pull"))
 
-(defun overleaf-project--pending-state (repo)
+(defun git-overleaf--pending-state (repo)
   "Return pending pull metadata for REPO, or nil."
   (when-let* ((action-str
-               (overleaf-project--git-config-get repo "overleaf-project.pendingAction")))
+               (git-overleaf--git-config-get repo "git-overleaf.pendingAction")))
     `(:action ,(intern action-str)
 		      :remote-commit
-		      ,(overleaf-project--git-config-get repo "overleaf-project.pendingRemoteCommit"))))
+		      ,(git-overleaf--git-config-get repo "git-overleaf.pendingRemoteCommit"))))
 
 ;;;; Local safety backups
 
-(defun overleaf-project--local-backup-ref-prefix ()
+(defun git-overleaf--local-backup-ref-prefix ()
   "Return the configured local backup ref prefix."
   (let ((prefix
          (string-trim-right
-          (string-trim overleaf-project-local-backup-ref-prefix)
+          (string-trim git-overleaf-local-backup-ref-prefix)
           "/")))
     (cond
      ((string-empty-p prefix)
-      (user-error "`overleaf-project-local-backup-ref-prefix' cannot be empty"))
+      (user-error "`git-overleaf-local-backup-ref-prefix' cannot be empty"))
      ((not (string-prefix-p "refs/" prefix))
-      (user-error "`overleaf-project-local-backup-ref-prefix' must start with `refs/'"))
+      (user-error "`git-overleaf-local-backup-ref-prefix' must start with `refs/'"))
      (t prefix))))
 
-(defun overleaf-project--sanitize-ref-component (value)
+(defun git-overleaf--sanitize-ref-component (value)
   "Return VALUE sanitized for use as one Git ref path component."
   (let ((component
          (replace-regexp-in-string
@@ -1414,51 +1411,51 @@ Signal an error on detached HEAD."
         "unknown"
       component)))
 
-(defun overleaf-project--local-backup-ref-name (repo target reason)
+(defun git-overleaf--local-backup-ref-name (repo target reason)
   "Return an unused backup ref name in REPO for TARGET and REASON."
-  (let* ((prefix (overleaf-project--local-backup-ref-prefix))
+  (let* ((prefix (git-overleaf--local-backup-ref-prefix))
          (branch
-          (or (overleaf-project--git-output-noerror repo "branch" "--show-current")
+          (or (git-overleaf--git-output-noerror repo "branch" "--show-current")
               "detached"))
          (base
           (format
            "%s/%s-%s-%s-%s"
            prefix
            (format-time-string "%Y%m%d-%H%M%S")
-           (overleaf-project--sanitize-ref-component branch)
-           (overleaf-project--sanitize-ref-component reason)
+           (git-overleaf--sanitize-ref-component branch)
+           (git-overleaf--sanitize-ref-component reason)
            (substring target 0 (min 12 (length target))))))
     (cl-loop
      for index from 0
      for ref = (if (zerop index) base (format "%s-%d" base index))
-     unless (overleaf-project--rev-parse-noerror repo ref)
+     unless (git-overleaf--rev-parse-noerror repo ref)
      return ref)))
 
-(defun overleaf-project--create-local-backup-ref
+(defun git-overleaf--create-local-backup-ref
     (repo reason &optional revision)
   "Create a local backup ref in REPO for REVISION before REASON.
 REVISION defaults to HEAD.  Return the created ref, or nil if backups are
 disabled or the revision does not exist."
-  (when overleaf-project-local-backups-enabled
+  (when git-overleaf-local-backups-enabled
     (when-let* ((target
-                 (overleaf-project--rev-parse-noerror
+                 (git-overleaf--rev-parse-noerror
                   repo
                   (or revision "HEAD")))
-                (ref (overleaf-project--local-backup-ref-name
+                (ref (git-overleaf--local-backup-ref-name
                       repo
                       target
                       reason)))
-      (overleaf-project--git-output
+      (git-overleaf--git-output
        repo
        "update-ref"
        "-m"
        (format "overleaf: backup before %s" reason)
        ref
        target)
-      (overleaf-project--debug "Created local backup ref %s at %s" ref target)
+      (git-overleaf--debug "Created local backup ref %s at %s" ref target)
       ref)))
 
 
-(provide 'overleaf-project-core)
+(provide 'git-overleaf-core)
 
-;;; overleaf-project-core.el ends here
+;;; git-overleaf-core.el ends here
