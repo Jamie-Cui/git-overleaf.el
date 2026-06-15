@@ -1,4 +1,4 @@
-;;; overleaf-project-sync-tree-test.el --- Remote tree sync tests -*- lexical-binding: t; -*-
+;;; git-overleaf-sync-tree-test.el --- Remote tree sync tests -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Jamie Cui
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -7,19 +7,19 @@
 
 (require 'cl-lib)
 (require 'ert)
-(require 'overleaf-project-core)
-(require 'overleaf-project-http)
-(require 'overleaf-project-sync)
+(require 'git-overleaf-core)
+(require 'git-overleaf-http)
+(require 'git-overleaf-sync)
 
-(defmacro overleaf-project-sync-tree-test--with-temp-dir (var &rest body)
+(defmacro git-overleaf-sync-tree-test--with-temp-dir (var &rest body)
   "Bind VAR to a temporary directory while running BODY."
   (declare (indent 1) (debug t))
-  `(let ((,var (make-temp-file "overleaf-project-sync-tree-test." t)))
+  `(let ((,var (make-temp-file "git-overleaf-sync-tree-test." t)))
      (unwind-protect
          (progn ,@body)
        (ignore-errors (delete-directory ,var t)))))
 
-(defun overleaf-project-sync-tree-test--write-file (root relative text)
+(defun git-overleaf-sync-tree-test--write-file (root relative text)
   "Write TEXT to RELATIVE under ROOT and return the absolute path."
   (let ((file (expand-file-name relative root)))
     (make-directory (file-name-directory file) t)
@@ -27,18 +27,18 @@
       (insert text))
     file))
 
-(defun overleaf-project-sync-tree-test--read-file (file)
+(defun git-overleaf-sync-tree-test--read-file (file)
   "Return FILE contents as a string."
   (with-temp-buffer
     (insert-file-contents file)
     (buffer-string)))
 
-(defun overleaf-project-sync-tree-test--root-table ()
+(defun git-overleaf-sync-tree-test--root-table ()
   "Return a remote table containing only the root folder."
   (let ((table (make-hash-table :test #'equal)))
     (puthash
      ""
-     (make-overleaf-project--entity
+     (make-git-overleaf--entity
       :path ""
       :name "rootFolder"
       :id "root"
@@ -46,12 +46,12 @@
      table)
     table))
 
-(defun overleaf-project-sync-tree-test--put-entity
+(defun git-overleaf-sync-tree-test--put-entity
     (table path id type &optional parent-id)
   "Put a remote entity in TABLE at PATH with ID, TYPE, and PARENT-ID."
   (puthash
    path
-   (make-overleaf-project--entity
+   (make-git-overleaf--entity
     :path path
     :name (file-name-nondirectory path)
     :id id
@@ -59,28 +59,28 @@
     :parent-id (or parent-id "root"))
    table))
 
-(defmacro overleaf-project-sync-tree-test--with-remote-stubs (&rest body)
+(defmacro git-overleaf-sync-tree-test--with-remote-stubs (&rest body)
   "Run BODY with Overleaf remote mutation helpers stubbed."
   (declare (indent 0) (debug t))
   `(let ((events nil)
          (folder-counter 0)
          (upload-counter 0))
-     (cl-letf (((symbol-function 'overleaf-project--create-folder)
+     (cl-letf (((symbol-function 'git-overleaf--create-folder)
                 (lambda (project-id parent-id name)
                   (setq folder-counter (1+ folder-counter))
                   (let ((id (format "created-folder-%d" folder-counter)))
                     (push `(:create-folder ,project-id ,parent-id ,name ,id)
                           events)
                     `(:_id ,id :name ,name))))
-               ((symbol-function 'overleaf-project--delete-entity)
+               ((symbol-function 'git-overleaf--delete-entity)
                 (lambda (project-id entity)
                   (push `(:delete
                           ,project-id
-                          ,(overleaf-project--entity-path entity)
-                          ,(overleaf-project--entity-id entity)
-                          ,(overleaf-project--entity-type entity))
+                          ,(git-overleaf--entity-path entity)
+                          ,(git-overleaf--entity-id entity)
+                          ,(git-overleaf--entity-type entity))
                         events)))
-               ((symbol-function 'overleaf-project--curl-upload-file)
+               ((symbol-function 'git-overleaf--curl-upload-file)
                 (lambda (project-id folder-id file-name file-path)
                   (setq upload-counter (1+ upload-counter))
                   (let ((id (format "uploaded-%d" upload-counter)))
@@ -88,7 +88,7 @@
                             ,project-id
                             ,folder-id
                             ,file-name
-                            ,(overleaf-project-sync-tree-test--read-file
+                            ,(git-overleaf-sync-tree-test--read-file
                               file-path)
                             ,id)
                           events)
@@ -98,7 +98,7 @@
                       ,(if (string-suffix-p ".tex" file-name)
                            "doc"
                          "file")))))
-               ((symbol-function 'overleaf-project--update-doc-text)
+               ((symbol-function 'git-overleaf--update-doc-text)
                 (lambda (project-id doc-id local-file remote-file)
                   (push `(:update-doc
                           ,project-id
@@ -106,7 +106,7 @@
                           ,(file-relative-name local-file)
                           ,(file-relative-name remote-file))
                         events)))
-               ((symbol-function 'overleaf-project--update-doc-text-content)
+               ((symbol-function 'git-overleaf--update-doc-text-content)
                 (lambda (project-id doc-id before after)
                   (push `(:update-metadata-doc
                           ,project-id
@@ -114,44 +114,44 @@
                           ,before
                           ,after)
                         events)))
-               ((symbol-function 'overleaf-project--warn)
+               ((symbol-function 'git-overleaf--warn)
                 (lambda (&rest args)
                   (push `(:warn ,@args) events))))
        ,@body)))
 
-(ert-deftest overleaf-project-sync-tree-test-scan-ignores-sync-metadata ()
-  (overleaf-project-sync-tree-test--with-temp-dir root
-    (let ((overleaf-project-sync-metadata-enabled t)
-          (overleaf-project-sync-metadata-file ".overleaf-project-sync.json"))
-      (overleaf-project-sync-tree-test--write-file
+(ert-deftest git-overleaf-sync-tree-test-scan-ignores-sync-metadata ()
+  (git-overleaf-sync-tree-test--with-temp-dir root
+    (let ((git-overleaf-sync-metadata-enabled t)
+          (git-overleaf-sync-metadata-file ".git-overleaf-sync.json"))
+      (git-overleaf-sync-tree-test--write-file
        root
-       ".overleaf-project-sync.json"
+       ".git-overleaf-sync.json"
        "{}\n")
-      (overleaf-project-sync-tree-test--write-file
+      (git-overleaf-sync-tree-test--write-file
        root
        "main.tex"
        "body\n")
-      (let* ((state (overleaf-project--scan-local-tree root))
+      (let* ((state (git-overleaf--scan-local-tree root))
              (files (plist-get state :files)))
         (should (gethash "main.tex" files))
-        (should-not (gethash ".overleaf-project-sync.json" files))))))
+        (should-not (gethash ".git-overleaf-sync.json" files))))))
 
-(ert-deftest overleaf-project-sync-tree-test-creates-folders-and-uploads-files ()
-  (let ((overleaf-project-sync-metadata-enabled t))
-    (overleaf-project-sync-tree-test--with-temp-dir local-root
-      (overleaf-project-sync-tree-test--with-temp-dir remote-root
-        (overleaf-project-sync-tree-test--write-file
+(ert-deftest git-overleaf-sync-tree-test-creates-folders-and-uploads-files ()
+  (let ((git-overleaf-sync-metadata-enabled t))
+    (git-overleaf-sync-tree-test--with-temp-dir local-root
+      (git-overleaf-sync-tree-test--with-temp-dir remote-root
+        (git-overleaf-sync-tree-test--write-file
          local-root
          "chapters/intro.tex"
          "intro\n")
-        (overleaf-project-sync-tree-test--write-file
+        (git-overleaf-sync-tree-test--write-file
          local-root
          "main.tex"
          "main\n")
         (let ((remote-table
-               (overleaf-project-sync-tree-test--root-table)))
-          (overleaf-project-sync-tree-test--with-remote-stubs
-            (overleaf-project--sync-local-tree
+               (git-overleaf-sync-tree-test--root-table)))
+          (git-overleaf-sync-tree-test--with-remote-stubs
+            (git-overleaf--sync-local-tree
              "project-id"
              local-root
              remote-root
@@ -166,36 +166,36 @@
               (should (equal (nth 4 (nth 1 events)) "intro\n"))
               (should (equal (nth 3 (nth 2 events)) "main.tex"))
               (should (equal (nth 4 (nth 2 events)) "main\n")))
-            (should (eq (overleaf-project--entity-type
+            (should (eq (git-overleaf--entity-type
                          (gethash "chapters" remote-table))
                         'folder))
-            (should (eq (overleaf-project--entity-type
+            (should (eq (git-overleaf--entity-type
                          (gethash "chapters/intro.tex" remote-table))
                         'doc))
-            (should (eq (overleaf-project--entity-type
+            (should (eq (git-overleaf--entity-type
                          (gethash "main.tex" remote-table))
                         'doc))))))))
 
-(ert-deftest overleaf-project-sync-tree-test-updates-existing-doc-text ()
-  (overleaf-project-sync-tree-test--with-temp-dir local-root
-    (overleaf-project-sync-tree-test--with-temp-dir remote-root
-      (overleaf-project-sync-tree-test--write-file
+(ert-deftest git-overleaf-sync-tree-test-updates-existing-doc-text ()
+  (git-overleaf-sync-tree-test--with-temp-dir local-root
+    (git-overleaf-sync-tree-test--with-temp-dir remote-root
+      (git-overleaf-sync-tree-test--write-file
        local-root
        "main.tex"
        "new\n")
-      (overleaf-project-sync-tree-test--write-file
+      (git-overleaf-sync-tree-test--write-file
        remote-root
        "main.tex"
        "old\n")
       (let ((remote-table
-             (overleaf-project-sync-tree-test--root-table)))
-        (overleaf-project-sync-tree-test--put-entity
+             (git-overleaf-sync-tree-test--root-table)))
+        (git-overleaf-sync-tree-test--put-entity
          remote-table
          "main.tex"
          "doc-1"
          'doc)
-        (overleaf-project-sync-tree-test--with-remote-stubs
-          (overleaf-project--sync-local-tree
+        (git-overleaf-sync-tree-test--with-remote-stubs
+          (git-overleaf--sync-local-tree
            "project-id"
            local-root
            remote-root
@@ -204,28 +204,28 @@
             (should (equal (mapcar #'car events) '(:update-doc)))
             (should (equal (nth 2 (car events)) "doc-1"))))))))
 
-(ert-deftest overleaf-project-sync-tree-test-replaces-remote-folder-with-file ()
-  (overleaf-project-sync-tree-test--with-temp-dir local-root
-    (overleaf-project-sync-tree-test--with-temp-dir remote-root
-      (overleaf-project-sync-tree-test--write-file
+(ert-deftest git-overleaf-sync-tree-test-replaces-remote-folder-with-file ()
+  (git-overleaf-sync-tree-test--with-temp-dir local-root
+    (git-overleaf-sync-tree-test--with-temp-dir remote-root
+      (git-overleaf-sync-tree-test--write-file
        local-root
        "asset"
        "file content\n")
       (let ((remote-table
-             (overleaf-project-sync-tree-test--root-table)))
-        (overleaf-project-sync-tree-test--put-entity
+             (git-overleaf-sync-tree-test--root-table)))
+        (git-overleaf-sync-tree-test--put-entity
          remote-table
          "asset"
          "folder-1"
          'folder)
-        (overleaf-project-sync-tree-test--put-entity
+        (git-overleaf-sync-tree-test--put-entity
          remote-table
          "asset/old.tex"
          "old-doc"
          'doc
          "folder-1")
-        (overleaf-project-sync-tree-test--with-remote-stubs
-          (overleaf-project--sync-local-tree
+        (git-overleaf-sync-tree-test--with-remote-stubs
+          (git-overleaf--sync-local-tree
            "project-id"
            local-root
            remote-root
@@ -235,46 +235,46 @@
             (should (equal (nth 2 (nth 0 events)) "asset"))
             (should (equal (nth 3 (nth 1 events)) "asset"))
             (should (equal (nth 4 (nth 1 events)) "file content\n")))
-          (should (eq (overleaf-project--entity-type
+          (should (eq (git-overleaf--entity-type
                        (gethash "asset" remote-table))
                       'file))
           (should-not (gethash "asset/old.tex" remote-table)))))))
 
-(ert-deftest overleaf-project-sync-tree-test-deletes-remote-only-entries-deepest-first ()
-  (overleaf-project-sync-tree-test--with-temp-dir local-root
-    (overleaf-project-sync-tree-test--with-temp-dir remote-root
+(ert-deftest git-overleaf-sync-tree-test-deletes-remote-only-entries-deepest-first ()
+  (git-overleaf-sync-tree-test--with-temp-dir local-root
+    (git-overleaf-sync-tree-test--with-temp-dir remote-root
       (let ((remote-table
-             (overleaf-project-sync-tree-test--root-table)))
-        (overleaf-project-sync-tree-test--put-entity
+             (git-overleaf-sync-tree-test--root-table)))
+        (git-overleaf-sync-tree-test--put-entity
          remote-table
          "old.txt"
          "old-file"
          'file)
-        (overleaf-project-sync-tree-test--put-entity
+        (git-overleaf-sync-tree-test--put-entity
          remote-table
          "dir"
          "dir-folder"
          'folder)
-        (overleaf-project-sync-tree-test--put-entity
+        (git-overleaf-sync-tree-test--put-entity
          remote-table
          "dir/nested.txt"
          "nested-file"
          'doc
          "dir-folder")
-        (overleaf-project-sync-tree-test--put-entity
+        (git-overleaf-sync-tree-test--put-entity
          remote-table
          "dir/sub"
          "sub-folder"
          'folder
          "dir-folder")
-        (overleaf-project-sync-tree-test--put-entity
+        (git-overleaf-sync-tree-test--put-entity
          remote-table
          "dir/sub/deep.txt"
          "deep-file"
          'file
          "sub-folder")
-        (overleaf-project-sync-tree-test--with-remote-stubs
-          (overleaf-project--sync-local-tree
+        (git-overleaf-sync-tree-test--with-remote-stubs
+          (git-overleaf--sync-local-tree
            "project-id"
            local-root
            remote-root
@@ -294,25 +294,25 @@
         (should-not (gethash "dir/sub" remote-table))
         (should-not (gethash "dir/sub/deep.txt" remote-table))))))
 
-(ert-deftest overleaf-project-sync-tree-test-remote-sync-metadata-is-not-deleted ()
-  (let ((overleaf-project-sync-metadata-enabled t)
-        (overleaf-project-sync-metadata-file ".overleaf-project-sync.json"))
-    (overleaf-project-sync-tree-test--with-temp-dir local-root
-      (overleaf-project-sync-tree-test--with-temp-dir remote-root
+(ert-deftest git-overleaf-sync-tree-test-remote-sync-metadata-is-not-deleted ()
+  (let ((git-overleaf-sync-metadata-enabled t)
+        (git-overleaf-sync-metadata-file ".git-overleaf-sync.json"))
+    (git-overleaf-sync-tree-test--with-temp-dir local-root
+      (git-overleaf-sync-tree-test--with-temp-dir remote-root
         (let ((remote-table
-               (overleaf-project-sync-tree-test--root-table)))
-          (overleaf-project-sync-tree-test--put-entity
+               (git-overleaf-sync-tree-test--root-table)))
+          (git-overleaf-sync-tree-test--put-entity
            remote-table
-           ".overleaf-project-sync.json"
+           ".git-overleaf-sync.json"
            "metadata-doc"
            'doc)
-          (overleaf-project-sync-tree-test--put-entity
+          (git-overleaf-sync-tree-test--put-entity
            remote-table
            "old.txt"
            "old-file"
            'file)
-          (overleaf-project-sync-tree-test--with-remote-stubs
-            (overleaf-project--sync-local-tree
+          (git-overleaf-sync-tree-test--with-remote-stubs
+            (git-overleaf--sync-local-tree
              "project-id"
              local-root
              remote-root
@@ -321,18 +321,18 @@
               (should (equal (mapcar (lambda (event) (nth 2 event))
                                      events)
                              '("old.txt")))))
-          (should (gethash ".overleaf-project-sync.json" remote-table))
+          (should (gethash ".git-overleaf-sync.json" remote-table))
           (should-not (gethash "old.txt" remote-table)))))))
 
-(ert-deftest overleaf-project-sync-tree-test-upload-sync-metadata-new-file ()
-  (let ((overleaf-project-sync-metadata-enabled t)
-        (overleaf-project-sync-metadata-file ".overleaf-project-sync.json"))
+(ert-deftest git-overleaf-sync-tree-test-upload-sync-metadata-new-file ()
+  (let ((git-overleaf-sync-metadata-enabled t)
+        (git-overleaf-sync-metadata-file ".git-overleaf-sync.json"))
     (let ((remote-table
-           (overleaf-project-sync-tree-test--root-table)))
-      (overleaf-project-sync-tree-test--with-remote-stubs
-        (cl-letf (((symbol-function 'overleaf-project--sync-metadata-json)
+           (git-overleaf-sync-tree-test--root-table)))
+      (git-overleaf-sync-tree-test--with-remote-stubs
+        (cl-letf (((symbol-function 'git-overleaf--sync-metadata-json)
                    (lambda (&rest _args) "{\"schema\":1}\n")))
-          (overleaf-project--upload-sync-metadata
+          (git-overleaf--upload-sync-metadata
            "/repo"
            "HEAD"
            "project-id"
@@ -341,26 +341,26 @@
           (should (equal (mapcar #'car events) '(:upload)))
           (should (equal (nth 2 (car events)) "root"))
           (should (equal (nth 3 (car events))
-                         ".overleaf-project-sync.json"))
+                         ".git-overleaf-sync.json"))
           (should (equal (nth 4 (car events)) "{\"schema\":1}\n")))
-        (should (eq (overleaf-project--entity-type
-                     (gethash ".overleaf-project-sync.json" remote-table))
+        (should (eq (git-overleaf--entity-type
+                     (gethash ".git-overleaf-sync.json" remote-table))
                     'file))))))
 
-(ert-deftest overleaf-project-sync-tree-test-upload-sync-metadata-replaces-file ()
-  (let ((overleaf-project-sync-metadata-enabled t)
-        (overleaf-project-sync-metadata-file ".overleaf-project-sync.json"))
+(ert-deftest git-overleaf-sync-tree-test-upload-sync-metadata-replaces-file ()
+  (let ((git-overleaf-sync-metadata-enabled t)
+        (git-overleaf-sync-metadata-file ".git-overleaf-sync.json"))
     (let ((remote-table
-           (overleaf-project-sync-tree-test--root-table)))
-      (overleaf-project-sync-tree-test--put-entity
+           (git-overleaf-sync-tree-test--root-table)))
+      (git-overleaf-sync-tree-test--put-entity
        remote-table
-       ".overleaf-project-sync.json"
+       ".git-overleaf-sync.json"
        "old-metadata-file"
        'file)
-      (overleaf-project-sync-tree-test--with-remote-stubs
-        (cl-letf (((symbol-function 'overleaf-project--sync-metadata-json)
+      (git-overleaf-sync-tree-test--with-remote-stubs
+        (cl-letf (((symbol-function 'git-overleaf--sync-metadata-json)
                    (lambda (&rest _args) "new metadata\n")))
-          (overleaf-project--upload-sync-metadata
+          (git-overleaf--upload-sync-metadata
            "/repo"
            "HEAD"
            "project-id"
@@ -368,24 +368,24 @@
         (let ((events (nreverse events)))
           (should (equal (mapcar #'car events) '(:delete :upload)))
           (should (equal (nth 2 (nth 0 events))
-                         ".overleaf-project-sync.json"))
+                         ".git-overleaf-sync.json"))
           (should (equal (nth 4 (nth 1 events)) "new metadata\n")))))))
 
-(ert-deftest overleaf-project-sync-tree-test-upload-sync-metadata-updates-doc ()
-  (let ((overleaf-project-sync-metadata-enabled t)
-        (overleaf-project-sync-metadata-file ".overleaf-project-sync.json")
-        (overleaf-project--remote-sync-metadata-text "old metadata\n"))
+(ert-deftest git-overleaf-sync-tree-test-upload-sync-metadata-updates-doc ()
+  (let ((git-overleaf-sync-metadata-enabled t)
+        (git-overleaf-sync-metadata-file ".git-overleaf-sync.json")
+        (git-overleaf--remote-sync-metadata-text "old metadata\n"))
     (let ((remote-table
-           (overleaf-project-sync-tree-test--root-table)))
-      (overleaf-project-sync-tree-test--put-entity
+           (git-overleaf-sync-tree-test--root-table)))
+      (git-overleaf-sync-tree-test--put-entity
        remote-table
-       ".overleaf-project-sync.json"
+       ".git-overleaf-sync.json"
        "metadata-doc"
        'doc)
-      (overleaf-project-sync-tree-test--with-remote-stubs
-        (cl-letf (((symbol-function 'overleaf-project--sync-metadata-json)
+      (git-overleaf-sync-tree-test--with-remote-stubs
+        (cl-letf (((symbol-function 'git-overleaf--sync-metadata-json)
                    (lambda (&rest _args) "new metadata\n")))
-          (overleaf-project--upload-sync-metadata
+          (git-overleaf--upload-sync-metadata
            "/repo"
            "HEAD"
            "project-id"
@@ -395,34 +395,34 @@
           (should (equal (nth 2 (car events)) "metadata-doc"))
           (should (equal (nth 3 (car events)) "old metadata\n"))
           (should (equal (nth 4 (car events)) "new metadata\n")))
-        (should (equal overleaf-project--remote-sync-metadata-text
+        (should (equal git-overleaf--remote-sync-metadata-text
                        "new metadata\n"))))))
 
-(ert-deftest overleaf-project-sync-tree-test-upload-sync-metadata-warns-without-root-or-text ()
-  (let ((overleaf-project-sync-metadata-enabled t)
-        (overleaf-project-sync-metadata-file ".overleaf-project-sync.json"))
+(ert-deftest git-overleaf-sync-tree-test-upload-sync-metadata-warns-without-root-or-text ()
+  (let ((git-overleaf-sync-metadata-enabled t)
+        (git-overleaf-sync-metadata-file ".git-overleaf-sync.json"))
     (let ((remote-table (make-hash-table :test #'equal)))
-      (overleaf-project-sync-tree-test--with-remote-stubs
-        (cl-letf (((symbol-function 'overleaf-project--sync-metadata-json)
+      (git-overleaf-sync-tree-test--with-remote-stubs
+        (cl-letf (((symbol-function 'git-overleaf--sync-metadata-json)
                    (lambda (&rest _args) "new metadata\n")))
-          (overleaf-project--upload-sync-metadata
+          (git-overleaf--upload-sync-metadata
            "/repo"
            "HEAD"
            "project-id"
            remote-table))
         (should (eq (caar events) :warn))))
     (let ((remote-table
-           (overleaf-project-sync-tree-test--root-table))
-          (overleaf-project--remote-sync-metadata-text nil))
-      (overleaf-project-sync-tree-test--put-entity
+           (git-overleaf-sync-tree-test--root-table))
+          (git-overleaf--remote-sync-metadata-text nil))
+      (git-overleaf-sync-tree-test--put-entity
        remote-table
-       ".overleaf-project-sync.json"
+       ".git-overleaf-sync.json"
        "metadata-doc"
        'doc)
-      (overleaf-project-sync-tree-test--with-remote-stubs
-        (cl-letf (((symbol-function 'overleaf-project--sync-metadata-json)
+      (git-overleaf-sync-tree-test--with-remote-stubs
+        (cl-letf (((symbol-function 'git-overleaf--sync-metadata-json)
                    (lambda (&rest _args) "new metadata\n")))
-          (overleaf-project--upload-sync-metadata
+          (git-overleaf--upload-sync-metadata
            "/repo"
            "HEAD"
            "project-id"
@@ -430,4 +430,4 @@
         (let ((events (nreverse events)))
           (should (equal (mapcar #'car events) '(:warn))))))))
 
-;;; overleaf-project-sync-tree-test.el ends here
+;;; git-overleaf-sync-tree-test.el ends here

@@ -1,56 +1,65 @@
-;;; overleaf-project-log.el --- Logging for overleaf-project -*- lexical-binding: t; -*-
+;;; git-overleaf-log.el --- Logging for git-overleaf -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2020-2026 Jamie Cui
 ;; Author: Jamie Cui <jamie.cui@outlook.com>
+;; URL: https://github.com/Jamie-Cui/git-overleaf
 ;; Assisted-by: Codex:GPT-5.5
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; This file is not part of GNU Emacs.
 
 ;;; Commentary:
 
-;; Global log buffer and logging helpers for overleaf-project.
+;; Global log buffer and logging helpers for git-overleaf.
 
 ;;; Code:
 
 ;;;; Customization
 
-(defgroup overleaf-project nil
+(defgroup git-overleaf nil
   "Clone, push, and pull full Overleaf projects."
-  :prefix "overleaf-project-"
+  :prefix "git-overleaf-"
   :group 'tools)
 
-(defcustom overleaf-project-debug nil
+(defcustom git-overleaf-debug nil
   "Whether to emit verbose debug messages."
   :type 'boolean
-  :group 'overleaf-project)
+  :group 'git-overleaf)
 
-(defcustom overleaf-project-log-echo t
+(defcustom git-overleaf-log-echo t
   "Whether Overleaf project log entries are also echoed in the minibuffer."
   :type 'boolean
-  :group 'overleaf-project)
+  :group 'git-overleaf)
 
 ;;;; Context
 
-(defvar overleaf-project-log-context nil
+(defvar git-overleaf-log-context nil
   "Dynamic plist describing the Overleaf project currently being logged.
 Supported keys include `:project-name', `:project-id', `:repo', and
 `:url'.")
 
-(defvar overleaf-project-log-context-function nil
-  "Function returning a fallback Overleaf project log context plist.")
+(defcustom git-overleaf-log-context-function
+  'git-overleaf--log-default-context
+  "Function returning a fallback Overleaf project log context plist.
+It is called with no arguments and should return a plist like
+`git-overleaf-log-context'.  The default function builds a context
+from the current Git repository, when one is available."
+  :type '(choice (const :tag "Use current Git repository"
+                        git-overleaf--log-default-context)
+                 (function :tag "Custom function"))
+  :group 'git-overleaf)
 
-(defconst overleaf-project-log--buffer-name "*overleaf-project-log*"
+(defconst git-overleaf-log--buffer-name "*git-overleaf-log*"
   "Name of the global Overleaf project log buffer.")
 
-(defconst overleaf-project-log--time-format "%Y-%m-%d %H:%M:%S"
+(defconst git-overleaf-log--time-format "%Y-%m-%d %H:%M:%S"
   "Time format used for entries in the Overleaf project log buffer.")
 
-(defvar overleaf-project-log--mutex
+(defvar git-overleaf-log--mutex
   (and (fboundp 'make-mutex)
-       (make-mutex "overleaf-project-log"))
+       (make-mutex "git-overleaf-log"))
   "Mutex protecting writes to the Overleaf project log buffer.")
 
-(defun overleaf-project-log-make-context (&rest keys)
+(defun git-overleaf-log-make-context (&rest keys)
   "Return a normalized log context plist.
 KEYS accepts `:project-name', `:project-id', `:repo', and `:url'."
   (let ((project-name (plist-get keys :project-name))
@@ -67,7 +76,7 @@ KEYS accepts `:project-name', `:project-id', `:repo', and `:url'."
      (when url
        (list :url url)))))
 
-(defun overleaf-project-log--merge-contexts (&rest contexts)
+(defun git-overleaf-log--merge-contexts (&rest contexts)
   "Merge context plists in CONTEXTS.
 Later non-nil values replace earlier values."
   (let (merged)
@@ -80,23 +89,23 @@ Later non-nil values replace earlier values."
               (setq merged (plist-put merged key value)))))))
     merged))
 
-(defun overleaf-project-log-current-context ()
+(defun git-overleaf-log-current-context ()
   "Return the current effective Overleaf project log context."
-  (overleaf-project-log--merge-contexts
-   (and overleaf-project-log-context-function
-        (ignore-errors (funcall overleaf-project-log-context-function)))
-   overleaf-project-log-context))
+  (git-overleaf-log--merge-contexts
+   (and git-overleaf-log-context-function
+        (ignore-errors (funcall git-overleaf-log-context-function)))
+   git-overleaf-log-context))
 
-(defmacro overleaf-project-log-with-context (context &rest body)
+(defmacro git-overleaf-log-with-context (context &rest body)
   "Run BODY with CONTEXT merged into the current log context."
   (declare (indent 1) (debug (form body)))
-  `(let ((overleaf-project-log-context
-          (overleaf-project-log--merge-contexts
-           (overleaf-project-log-current-context)
+  `(let ((git-overleaf-log-context
+          (git-overleaf-log--merge-contexts
+           (git-overleaf-log-current-context)
            ,context)))
      ,@body))
 
-(defun overleaf-project-log--context-label (context)
+(defun git-overleaf-log--context-label (context)
   "Return a display label for CONTEXT."
   (let* ((project-name (plist-get context :project-name))
          (project-id (plist-get context :project-id))
@@ -122,90 +131,90 @@ Later non-nil values replace earlier values."
 
 ;;;; Buffer
 
-(define-derived-mode overleaf-project-log-mode special-mode "Overleaf-Project-Log"
+(define-derived-mode git-overleaf-log-mode special-mode "Git-Overleaf-Log"
   "Major mode for the global Overleaf project log buffer."
   (setq-local truncate-lines t))
 
-(defun overleaf-project-log--buffer ()
+(defun git-overleaf-log--buffer ()
   "Return the global Overleaf project log buffer."
-  (let ((buffer (get-buffer-create overleaf-project-log--buffer-name)))
+  (let ((buffer (get-buffer-create git-overleaf-log--buffer-name)))
     (with-current-buffer buffer
-      (unless (derived-mode-p 'overleaf-project-log-mode)
-        (overleaf-project-log-mode)))
+      (unless (derived-mode-p 'git-overleaf-log-mode)
+        (git-overleaf-log-mode)))
     buffer))
 
 ;;;###autoload
-(defun overleaf-project-log ()
+(defun git-overleaf-log ()
   "Display the global Overleaf project log buffer."
   (interactive)
-  (display-buffer (overleaf-project-log--buffer)))
+  (display-buffer (git-overleaf-log--buffer)))
 
 ;;;###autoload
-(defun overleaf-project-log-clear ()
+(defun git-overleaf-log-clear ()
   "Clear the global Overleaf project log buffer."
   (interactive)
-  (let ((buffer (overleaf-project-log--buffer)))
+  (let ((buffer (git-overleaf-log--buffer)))
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
         (erase-buffer)))))
 
-(defmacro overleaf-project-log--with-mutex (&rest body)
+(defmacro git-overleaf-log--with-mutex (&rest body)
   "Run BODY while holding the log mutex when available."
   (declare (indent 0) (debug t))
-  `(if overleaf-project-log--mutex
+  `(if git-overleaf-log--mutex
        (progn
-         (mutex-lock overleaf-project-log--mutex)
+         (mutex-lock git-overleaf-log--mutex)
          (unwind-protect
              (progn ,@body)
-           (mutex-unlock overleaf-project-log--mutex)))
+           (mutex-unlock git-overleaf-log--mutex)))
      ,@body))
 
-(defun overleaf-project-log--append (level text)
+(defun git-overleaf-log--append (level text)
   "Append TEXT as LEVEL to the global Overleaf project log buffer."
-  (let* ((context (overleaf-project-log-current-context))
-         (timestamp (format-time-string overleaf-project-log--time-format))
+  (let* ((context (git-overleaf-log-current-context))
+         (timestamp (format-time-string git-overleaf-log--time-format))
          (prefix (format "%s %-5s [%s] "
                          timestamp
                          (upcase (symbol-name level))
-                         (overleaf-project-log--context-label context)))
+                         (git-overleaf-log--context-label context)))
          (lines (split-string (or text "") "\n"))
-         (buffer (overleaf-project-log--buffer)))
-    (overleaf-project-log--with-mutex
-      (with-current-buffer buffer
-        (let ((inhibit-read-only t)
-              (moving (= (point) (point-max))))
-          (save-excursion
-            (goto-char (point-max))
-            (insert prefix (car lines) "\n")
-            (dolist (line (cdr lines))
-              (insert (make-string (length prefix) ?\s) line "\n")))
-          (when moving
-            (goto-char (point-max))))))))
+         (buffer (git-overleaf-log--buffer)))
+    (git-overleaf-log--with-mutex
+     (with-current-buffer buffer
+       (let ((inhibit-read-only t)
+             (moving (eobp)))
+         (save-excursion
+           (goto-char (point-max))
+           (insert prefix (car lines) "\n")
+           (dolist (line (cdr lines))
+             (insert (make-string (length prefix) ?\s) line "\n")))
+         (when moving
+           (goto-char (point-max))))))))
 
-(defun overleaf-project-log--emit (level echo-prefix format-string args)
+(defun git-overleaf-log--emit (level echo-prefix format-string args)
   "Log LEVEL entry and echo it with ECHO-PREFIX when enabled.
 FORMAT-STRING and ARGS are passed to `format' to build the log text."
   (let ((text (apply #'format format-string args)))
-    (overleaf-project-log--append level text)
-    (when overleaf-project-log-echo
-      (message "%s" (concat "[overleaf-project] " echo-prefix text)))
+    (git-overleaf-log--append level text)
+    (when git-overleaf-log-echo
+      (message "%s" (concat "[git-overleaf] " echo-prefix text)))
     text))
 
 ;;;; Logging helpers
 
-(defun overleaf-project--message (format-string &rest args)
+(defun git-overleaf--message (format-string &rest args)
   "Log an Overleaf info message using FORMAT-STRING and ARGS."
-  (overleaf-project-log--emit 'info "" format-string args))
+  (git-overleaf-log--emit 'info "" format-string args))
 
-(defun overleaf-project--warn (format-string &rest args)
+(defun git-overleaf--warn (format-string &rest args)
   "Log an Overleaf warning using FORMAT-STRING and ARGS."
-  (overleaf-project-log--emit 'warn "WARNING: " format-string args))
+  (git-overleaf-log--emit 'warn "WARNING: " format-string args))
 
-(defun overleaf-project--debug (format-string &rest args)
+(defun git-overleaf--debug (format-string &rest args)
   "Log a debug message using FORMAT-STRING and ARGS."
-  (when overleaf-project-debug
-    (overleaf-project-log--emit 'debug "DEBUG: " format-string args)))
+  (when git-overleaf-debug
+    (git-overleaf-log--emit 'debug "DEBUG: " format-string args)))
 
-(provide 'overleaf-project-log)
+(provide 'git-overleaf-log)
 
-;;; overleaf-project-log.el ends here
+;;; git-overleaf-log.el ends here

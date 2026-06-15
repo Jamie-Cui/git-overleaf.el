@@ -1,4 +1,4 @@
-;;; coverage.el --- Batch coverage runner for overleaf-project -*- lexical-binding: t; -*-
+;;; coverage.el --- Batch coverage runner for git-overleaf -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Jamie Cui
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -9,38 +9,38 @@
 (require 'ert)
 (require 'testcover)
 
-(defvar overleaf-project-coverage-min 0
+(defvar git-overleaf-coverage-min 0
   "Minimum total coverage percentage required by the batch coverage run.")
 
-(defvar overleaf-project-coverage-directory "coverage"
+(defvar git-overleaf-coverage-directory "coverage"
   "Directory where batch coverage reports are written.")
 
-(defconst overleaf-project-coverage--source-files
-  '("overleaf-project-log.el"
-    "overleaf-project-core.el"
-    "overleaf-project-http.el"
-    "overleaf-project-sync.el"
-    "overleaf-project-firefox.el"
-    "overleaf-project-auth.el"
-    "overleaf-project.el"
-    "overleaf-project-magit.el")
+(defconst git-overleaf-coverage--source-files
+  '("git-overleaf-log.el"
+    "git-overleaf-core.el"
+    "git-overleaf-http.el"
+    "git-overleaf-sync.el"
+    "git-overleaf-firefox.el"
+    "git-overleaf-auth.el"
+    "git-overleaf.el"
+    "git-overleaf-magit.el")
   "Source files instrumented by the batch coverage run.")
 
-(defconst overleaf-project-coverage--test-files
-  '("test/overleaf-project-test.el"
-    "test/overleaf-project-git-test.el"
-    "test/overleaf-project-sync-tree-test.el"
-    "test/overleaf-project-command-test.el"
-    "test/overleaf-project-http-auth-test.el"
-    "test/overleaf-project-async-test.el"
-    "test/overleaf-project-magit-test.el")
+(defconst git-overleaf-coverage--test-files
+  '("test/git-overleaf-test.el"
+    "test/git-overleaf-git-test.el"
+    "test/git-overleaf-sync-tree-test.el"
+    "test/git-overleaf-command-test.el"
+    "test/git-overleaf-http-auth-test.el"
+    "test/git-overleaf-async-test.el"
+    "test/git-overleaf-magit-test.el")
   "ERT files loaded by the batch coverage run.")
 
-(defvar overleaf-project-coverage--instrumented nil
+(defvar git-overleaf-coverage--instrumented nil
   "Alist mapping source file names to instrumented definition symbols.")
 
-(defconst overleaf-project-coverage--uninstrumented-symbols
-  '(("overleaf-project-core.el" . (overleaf-project--async-start)))
+(defconst git-overleaf-coverage--uninstrumented-symbols
+  '(("git-overleaf-core.el" . (git-overleaf--async-start)))
   "Definitions restored without `testcover' instrumentation.
 
 Emacs 29's Edebug instrumentation can leave marker forms inside the
@@ -48,7 +48,7 @@ lexical environment of `make-thread' closures.  Keep the async thread
 entry point uninstrumented so the batch coverage run remains portable
 across the Emacs versions used locally and in CI.")
 
-(defun overleaf-project-coverage--restore-definition (file symbol)
+(defun git-overleaf-coverage--restore-definition (file symbol)
   "Restore SYMBOL from FILE without `testcover' instrumentation."
   (with-temp-buffer
     (insert-file-contents (expand-file-name file default-directory))
@@ -67,10 +67,10 @@ across the Emacs versions used locally and in CI.")
       (unless found
         (error "Could not restore %S from %s" symbol file)))))
 
-(defun overleaf-project-coverage--instrument-file (file)
+(defun git-overleaf-coverage--instrument-file (file)
   "Instrument FILE with `testcover' and remember its definition symbols."
   (let ((uninstrumented
-         (cdr (assoc file overleaf-project-coverage--uninstrumented-symbols)))
+         (cdr (assoc file git-overleaf-coverage--uninstrumented-symbols)))
         symbols)
     (cl-letf (((symbol-function 'message)
                (lambda (&rest _args) nil)))
@@ -80,16 +80,16 @@ across the Emacs versions used locally and in CI.")
                           (memq symbol uninstrumented))
                         (mapcar #'car edebug-form-data)))
     (dolist (symbol uninstrumented)
-      (overleaf-project-coverage--restore-definition file symbol))
+      (git-overleaf-coverage--restore-definition file symbol))
     (push (cons file symbols)
-          overleaf-project-coverage--instrumented)))
+          git-overleaf-coverage--instrumented)))
 
-(defun overleaf-project-coverage--entry-covered-p (entry)
+(defun git-overleaf-coverage--entry-covered-p (entry)
   "Return non-nil if testcover ENTRY is considered covered."
   (or (eq entry 'edebug-ok-coverage)
       (memq (car-safe entry) '(testcover-1value maybe noreturn))))
 
-(defun overleaf-project-coverage--symbol-summary (symbol)
+(defun git-overleaf-coverage--symbol-summary (symbol)
   "Return (TOTAL COVERED UNCOVERED) for SYMBOL's coverage vector."
   (let ((coverage (get symbol 'edebug-coverage))
         (total 0)
@@ -98,13 +98,13 @@ across the Emacs versions used locally and in CI.")
     (when (vectorp coverage)
       (dotimes (index (length coverage))
         (setq total (1+ total))
-        (if (overleaf-project-coverage--entry-covered-p
+        (if (git-overleaf-coverage--entry-covered-p
              (aref coverage index))
             (setq covered (1+ covered))
           (setq uncovered (1+ uncovered)))))
     (list total covered uncovered)))
 
-(defun overleaf-project-coverage--file-summary (file symbols)
+(defun git-overleaf-coverage--file-summary (file symbols)
   "Return a plist coverage summary for FILE and SYMBOLS."
   (let ((defs 0)
         (total 0)
@@ -112,7 +112,7 @@ across the Emacs versions used locally and in CI.")
         (uncovered 0))
     (dolist (symbol symbols)
       (pcase-let ((`(,sym-total ,sym-covered ,sym-uncovered)
-                   (overleaf-project-coverage--symbol-summary symbol)))
+                   (git-overleaf-coverage--symbol-summary symbol)))
         (when (> sym-total 0)
           (setq defs (1+ defs))
           (setq total (+ total sym-total))
@@ -127,15 +127,15 @@ across the Emacs versions used locally and in CI.")
                        100.0
                      (* 100.0 (/ (float covered) total))))))
 
-(defun overleaf-project-coverage--summaries ()
+(defun git-overleaf-coverage--summaries ()
   "Return coverage summaries for all instrumented files."
   (mapcar (lambda (entry)
-            (overleaf-project-coverage--file-summary
+            (git-overleaf-coverage--file-summary
              (car entry)
              (cdr entry)))
-          (nreverse overleaf-project-coverage--instrumented)))
+          (nreverse git-overleaf-coverage--instrumented)))
 
-(defun overleaf-project-coverage--total-summary (summaries)
+(defun git-overleaf-coverage--total-summary (summaries)
   "Return total coverage summary for SUMMARIES."
   (let ((defs 0)
         (total 0)
@@ -155,7 +155,7 @@ across the Emacs versions used locally and in CI.")
                        100.0
                      (* 100.0 (/ (float covered) total))))))
 
-(defun overleaf-project-coverage--format-summary (summary)
+(defun git-overleaf-coverage--format-summary (summary)
   "Return a human-readable line for coverage SUMMARY."
   (format "%-28s defs=%3d forms=%5d covered=%5d missed=%5d %6.2f%%"
           (plist-get summary :file)
@@ -165,12 +165,12 @@ across the Emacs versions used locally and in CI.")
           (plist-get summary :uncovered)
           (plist-get summary :percent)))
 
-(defun overleaf-project-coverage--write-tsv (summaries total)
+(defun git-overleaf-coverage--write-tsv (summaries total)
   "Write SUMMARIES and TOTAL to the batch coverage TSV report."
-  (make-directory overleaf-project-coverage-directory t)
+  (make-directory git-overleaf-coverage-directory t)
   (let ((report (expand-file-name
                  "testcover-summary.tsv"
-                 overleaf-project-coverage-directory)))
+                 git-overleaf-coverage-directory)))
     (with-temp-file report
       (insert "file\tdefs\tforms\tcovered\tmissed\tpercent\n")
       (dolist (summary (append summaries (list total)))
@@ -184,34 +184,34 @@ across the Emacs versions used locally and in CI.")
                  (plist-get summary :percent)))))
     report))
 
-(defun overleaf-project-coverage-run ()
+(defun git-overleaf-coverage-run ()
   "Run ERT tests under `testcover' and write a coverage summary."
-  (setq overleaf-project-coverage--instrumented nil)
-  (dolist (file overleaf-project-coverage--source-files)
-    (overleaf-project-coverage--instrument-file file))
-  (dolist (file overleaf-project-coverage--test-files)
+  (setq git-overleaf-coverage--instrumented nil)
+  (dolist (file git-overleaf-coverage--source-files)
+    (git-overleaf-coverage--instrument-file file))
+  (dolist (file git-overleaf-coverage--test-files)
     (load (expand-file-name file default-directory) nil t))
   (let* ((stats (ert-run-tests-batch t))
-         (summaries (overleaf-project-coverage--summaries))
-         (total (overleaf-project-coverage--total-summary summaries))
-         (report (overleaf-project-coverage--write-tsv summaries total)))
+         (summaries (git-overleaf-coverage--summaries))
+         (total (git-overleaf-coverage--total-summary summaries))
+         (report (git-overleaf-coverage--write-tsv summaries total)))
     (princ "\nCoverage summary:\n")
     (dolist (summary summaries)
-      (princ (concat (overleaf-project-coverage--format-summary summary)
+      (princ (concat (git-overleaf-coverage--format-summary summary)
                      "\n")))
-    (princ (concat (overleaf-project-coverage--format-summary total)
+    (princ (concat (git-overleaf-coverage--format-summary total)
                    "\n"))
     (princ (format "Coverage report: %s\n" report))
     (when (> (ert-stats-completed-unexpected stats) 0)
       (kill-emacs 1))
-    (when (< (plist-get total :percent) overleaf-project-coverage-min)
+    (when (< (plist-get total :percent) git-overleaf-coverage-min)
       (princ
        (format
         "Coverage %.2f%% is below required minimum %.2f%%\n"
         (plist-get total :percent)
-        (float overleaf-project-coverage-min)))
+        (float git-overleaf-coverage-min)))
       (kill-emacs 1))))
 
-(overleaf-project-coverage-run)
+(git-overleaf-coverage-run)
 
 ;;; coverage.el ends here

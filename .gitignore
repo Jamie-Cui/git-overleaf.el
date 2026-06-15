@@ -10,6 +10,7 @@ devenv.local.nix
 
 overleaf
 *.elc
+*-autoloads.el
 node_modules
 
 __pycache__
@@ -24,3 +25,4 @@ coverage
 .worktrees
 /docs/superpowers/plans/*.md
 /.agent-shell/
+/.qoder/
