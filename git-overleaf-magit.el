@@ -15,9 +15,16 @@
 ;;; Code:
 
 (require 'git-overleaf)
+(eval-and-compile
+  (require 'magit-section))
 (require 'magit nil t)
 
 (declare-function git-overleaf--async-enabled-p "git-overleaf-core")
+(declare-function magit--insert-diff "magit-diff" (keep-error &rest args))
+(declare-function magit-get-mode-buffer "magit-mode" (mode &optional value frame))
+(declare-function magit-refresh "magit-mode" ())
+(declare-function magit-status-setup-buffer "magit-status" (&optional directory))
+(declare-function magit-toplevel "magit-git" (&optional directory))
 
 ;;;; Customization
 

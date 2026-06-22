@@ -21,10 +21,6 @@
 (require 'git-overleaf-firefox)
 (require 'git-overleaf-http)
 
-(declare-function git-overleaf--async-enabled-p "git-overleaf-core")
-(declare-function git-overleaf--async-register-process "git-overleaf-core")
-(declare-function git-overleaf--async-unregister-process "git-overleaf-core")
-
 ;;;; Authentication
 
 (defmacro git-overleaf--with-webdriver (&rest body)
@@ -207,7 +203,7 @@ ON-SUCCESS, when non-nil, is called after cookies are saved and applied."
    (lambda (full-cookies)
      (git-overleaf--apply-authenticated-cookies full-cookies nil)
      (git-overleaf--message "Authentication finished for %s"
-                                (git-overleaf--cookie-domain))
+                            (git-overleaf--cookie-domain))
      (when on-success
        (funcall on-success full-cookies)))))
 
