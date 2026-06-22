@@ -40,6 +40,7 @@ Git 快照工作流。
 
 - =websocket= 1.15 或更新版本
 - =webdriver= 0.1 或更新版本
+- =magit-section= 4.5 或更新版本
 
 项目同步还要求系统中可用以下外部可执行文件：
 
@@ -50,6 +51,8 @@ Git 快照工作流。
 默认认证后端通过 Selenium webdriver 使用 Firefox，因此需要安装
 =geckodriver=。Firefox cookie 导入后端不需要 =geckodriver=，但要求当前
 Emacs 构建支持 SQLite。
+
+可选的 =magit-status= 集成在运行时还需要 Magit。
 
 * 安装
 

@@ -5,7 +5,7 @@
 ;; Assisted-by: Codex:GPT-5.5
 ;; Created: April 14, 2026
 ;; URL: https://github.com/Jamie-Cui/git-overleaf
-;; Package-Requires: ((emacs "29.4") (websocket "1.15") (webdriver "0.1"))
+;; Package-Requires: ((emacs "29.4") (websocket "1.15") (webdriver "0.1") (magit-section "4.5"))
 ;; Version: 2.0.0
 ;; Keywords: hypermedia, tex, tools
 ;; SPDX-License-Identifier: GPL-3.0-or-later

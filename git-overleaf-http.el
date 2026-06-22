@@ -19,10 +19,6 @@
 (require 'websocket)
 (require 'git-overleaf-core)
 
-(declare-function git-overleaf--async-register-process "git-overleaf-core")
-(declare-function git-overleaf--async-unregister-process "git-overleaf-core")
-(declare-function mm-url-decode-entities-string "mm-url")
-
 (cl-defstruct git-overleaf--socketio-client
   "Minimal Socket.IO 0.9 client state."
   websocket
@@ -175,8 +171,8 @@ If REFRESH is non-nil, bypass the cached token and fetch a fresh one."
 (defun git-overleaf--curl-download (url output-file headers)
   "Download URL into OUTPUT-FILE with HEADERS using curl."
   (git-overleaf--run git-overleaf-curl-executable
-                         (git-overleaf--curl-download-args
-                          url output-file headers)))
+                     (git-overleaf--curl-download-args
+                      url output-file headers)))
 
 (defun git-overleaf--curl-request (method url headers &optional body)
   "Run a curl request with METHOD to URL using HEADERS and optional BODY."
