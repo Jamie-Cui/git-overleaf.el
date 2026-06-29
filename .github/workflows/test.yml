@@ -8,9 +8,6 @@ on:
 jobs:
   ert:
     runs-on: ubuntu-latest
-    env:
-      NIX_CONFIG: |
-        access-tokens = github.com=${{ github.token }}
 
     steps:
       - uses: actions/checkout@v4
