@@ -3,6 +3,7 @@
 
 [[https://github.com/Jamie-Cui/git-overleaf/actions/workflows/test.yml][https://github.com/Jamie-Cui/git-overleaf/actions/workflows/test.yml/badge.svg]]
 [[https://github.com/Jamie-Cui/git-overleaf/actions/workflows/coverage.yml][https://github.com/Jamie-Cui/git-overleaf/actions/workflows/coverage.yml/badge.svg]]
+[[https://melpa.org/#/git-overleaf][https://melpa.org/packages/git-overleaf-badge.svg]]
 
 English README: [[file:README.org][README.org]]
 
@@ -56,27 +57,53 @@ Emacs 构建支持 SQLite。
 
 * 安装
 
-** VC 包安装
+** MELPA
 
-~git-overleaf~ 目前尚未发布到 MELPA。可使用 =use-package= 直接从
-Git 仓库安装：
+~git-overleaf~ 已发布到 MELPA。推荐通过 Emacs 内置包管理器安装。
+
+如果尚未配置 MELPA，请先将它加入 ~package-archives~：
+
+#+begin_src elisp
+  (require 'package)
+  (add-to-list 'package-archives
+               '("melpa" . "https://melpa.org/packages/") t)
+  (package-initialize)
+#+end_src
+
+然后刷新包列表并安装 ~git-overleaf~：
+
+#+begin_example
+M-x package-refresh-contents RET
+M-x package-install RET git-overleaf RET
+#+end_example
+
+使用 =use-package= 时：
 
 #+begin_src elisp
   (use-package git-overleaf
-    :vc (:url "https://github.com/Jamie-Cui/git-overleaf" :rev "main"))
+    :ensure t)
 #+end_src
-
-如果不使用 =use-package=，可直接调用 Emacs 的包管理器：
-
-#+begin_example
-M-x package-vc-install RET https://github.com/Jamie-Cui/git-overleaf.git RET
-#+end_example
 
 如果使用自建 Overleaf 实例，请在使用交互命令前设置服务器地址：
 
 #+begin_src elisp
   (setopt git-overleaf-url "https://latex.example.edu")
 #+end_src
+
+** 开发版安装
+
+如需安装 Git 仓库中的未发布改动，可使用 =use-package= 的 VC 支持：
+
+#+begin_src elisp
+  (use-package git-overleaf
+    :vc (:url "https://github.com/Jamie-Cui/git-overleaf" :rev "main"))
+#+end_src
+
+如果不使用 =use-package=，可直接调用 Emacs 的 VC 包安装器：
+
+#+begin_example
+M-x package-vc-install RET https://github.com/Jamie-Cui/git-overleaf.git RET
+#+end_example
 
 ** 手动 checkout
 

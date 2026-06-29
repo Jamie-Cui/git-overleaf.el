@@ -6,6 +6,7 @@
 
 [[https://github.com/Jamie-Cui/git-overleaf/actions/workflows/test.yml][https://github.com/Jamie-Cui/git-overleaf/actions/workflows/test.yml/badge.svg]]
 [[https://github.com/Jamie-Cui/git-overleaf/actions/workflows/coverage.yml][https://github.com/Jamie-Cui/git-overleaf/actions/workflows/coverage.yml/badge.svg]]
+[[https://melpa.org/#/git-overleaf][https://melpa.org/packages/git-overleaf-badge.svg]]
 
 Chinese README: [[file:README.zh.org][README.zh.org]]
 
@@ -68,21 +69,33 @@ runtime.
 
 * Installation
 
-** VC package install
+** MELPA
 
-~git-overleaf~ is not yet available from MELPA.  Install it
-directly from the Git repository with =use-package=:
+~git-overleaf~ is available from MELPA.  The recommended installation
+path is Emacs' built-in package manager.
+
+If MELPA is not already configured, add it to ~package-archives~:
+
+#+begin_src elisp
+  (require 'package)
+  (add-to-list 'package-archives
+               '("melpa" . "https://melpa.org/packages/") t)
+  (package-initialize)
+#+end_src
+
+Then refresh package contents and install ~git-overleaf~:
+
+#+begin_example
+M-x package-refresh-contents RET
+M-x package-install RET git-overleaf RET
+#+end_example
+
+With =use-package=:
 
 #+begin_src elisp
   (use-package git-overleaf
-    :vc (:url "https://github.com/Jamie-Cui/git-overleaf" :rev "main"))
+    :ensure t)
 #+end_src
-
-Without =use-package=, use Emacs' package manager directly:
-
-#+begin_example
-M-x package-vc-install RET https://github.com/Jamie-Cui/git-overleaf.git RET
-#+end_example
 
 For a self-hosted Overleaf instance, set the server URL before using the
 interactive commands:
@@ -90,6 +103,22 @@ interactive commands:
 #+begin_src elisp
   (setopt git-overleaf-url "https://latex.example.edu")
 #+end_src
+
+** Development version
+
+To install unreleased changes from the Git repository, use
+=use-package= with VC support:
+
+#+begin_src elisp
+  (use-package git-overleaf
+    :vc (:url "https://github.com/Jamie-Cui/git-overleaf" :rev "main"))
+#+end_src
+
+Without =use-package=, use Emacs' VC package installer directly:
+
+#+begin_example
+M-x package-vc-install RET https://github.com/Jamie-Cui/git-overleaf.git RET
+#+end_example
 
 ** Manual checkout
 
