@@ -387,6 +387,17 @@ M-x git-overleaf-force-stop
 取消会尽可能中断外部进程、清理 async 锁，并丢弃尚未执行的前台回调。已
 经在本地或远端完成的工作不会自动回滚。
 
+* 下载进度与代理环境
+
+快照下载会在 ~git-overleaf-log-echo~ 为非 nil 时，在 minibuffer 中显示
+=Downloading project ... N%= 形式的 curl 进度。
+
+下载由 ~git-overleaf-curl-executable~ 指定的 curl 执行，因此代理配置来自
+Emacs 的 ~process-environment~，不一定等同于运行 =emacsclient= 的 shell。
+如果 GUI Emacs 中下载 Overleaf 很慢，先在 Emacs 里检查
+=(getenv "HTTPS_PROXY")= 和 =(getenv "HTTP_PROXY")=，再按需用 =setenv= 或
+=exec-path-from-shell= 之类的工具把代理变量复制进 Emacs。
+
 * Magit 集成
 
 若要在 =magit-status= 中显示 Overleaf section，请加载可选集成：

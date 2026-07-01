@@ -428,6 +428,18 @@ Cancellation interrupts external processes where possible, clears async
 locks, and drops pending foreground callbacks.  Work already completed
 locally or remotely is not rolled back.
 
+* Download Progress and Proxy Environment
+
+Snapshot downloads echo curl progress in the minibuffer as
+=Downloading project ... N%= when ~git-overleaf-log-echo~ is non-nil.
+
+Downloads are performed by ~git-overleaf-curl-executable~, so proxy
+configuration comes from Emacs' ~process-environment~, not necessarily
+from the shell that runs =emacsclient=.  If Overleaf downloads are slow
+in GUI Emacs, check =(getenv "HTTPS_PROXY")= and =(getenv "HTTP_PROXY")=
+inside Emacs, then copy the needed proxy variables with =setenv= or a
+tool such as =exec-path-from-shell=.
+
 * Magit Integration
 
 To display an Overleaf section in =magit-status=, load the optional
