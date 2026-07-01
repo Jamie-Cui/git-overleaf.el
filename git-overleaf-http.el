@@ -197,6 +197,19 @@ When PROGRESS is non-nil, ask curl to emit progress output."
                      label
                      percent))))
 
+(defmacro git-overleaf--with-optional-mutex (mutex &rest body)
+  "Evaluate BODY while holding MUTEX when MUTEX is non-nil."
+  (declare (indent 1) (debug (form body)))
+  (let ((mutex-var (make-symbol "mutex")))
+    `(let ((,mutex-var ,mutex))
+       (if ,mutex-var
+           (progn
+             (mutex-lock ,mutex-var)
+             (unwind-protect
+                 (progn ,@body)
+               (mutex-unlock ,mutex-var)))
+         (progn ,@body)))))
+
 (defun git-overleaf--curl-download-run-with-progress
     (program args progress-label)
   "Run curl PROGRAM with ARGS and echo progress for PROGRESS-LABEL."
@@ -209,81 +222,69 @@ When PROGRESS is non-nil, ask curl to emit progress output."
          (progress-tail "")
          (last-percent nil)
          (result nil))
-    (cl-labels
-        ((with-lock (function)
-           (if mutex
-               (progn
-                 (mutex-lock mutex)
-                 (unwind-protect
-                     (funcall function)
-                   (mutex-unlock mutex)))
-             (funcall function)))
-         (record-output (string)
-           (with-lock
-            (lambda ()
-              (push string output-chunks)
-              (setq progress-tail (concat progress-tail string))
-              (when (> (length progress-tail) 200)
-                (setq progress-tail
-                      (substring progress-tail
-                                 (- (length progress-tail) 200))))
-              (when-let* ((percent
-                           (git-overleaf--curl-download-progress-percent
-                            progress-tail))
-                          ((not (equal percent last-percent))))
-                (setq last-percent percent)
-                (git-overleaf--curl-download-progress-message
-                 progress-label
-                 percent)))))
-         (mark-done (proc)
-           (when (memq (process-status proc) '(exit signal))
-             (with-lock
-              (lambda ()
-                (unless done
-                  (setq status (process-exit-status proc))
-                  (setq done t)))))))
-      (unwind-protect
-          (setq
-           result
-           (progn
-             (git-overleaf--curl-download-progress-message progress-label 0)
-             (setq process
-                   (make-process
-                    :name "git-overleaf-curl-download"
-                    :buffer nil
-                    :command (cons program args)
-                    :connection-type 'pipe
-                    :noquery t
-                    :filter (lambda (_proc string)
-                              (record-output string))
-                    :sentinel (lambda (proc _event)
-                                (mark-done proc))))
-             (git-overleaf--async-register-process process)
-             (while (not done)
-               (accept-process-output process 0.05)
-               (when (fboundp 'thread-yield)
-                 (thread-yield)))
-             (let ((output nil))
-               (with-lock
-                (lambda ()
-                  (setq output
-                        (string-trim-right
-                         (apply #'concat (nreverse output-chunks))))))
-               (prog1
-                   (git-overleaf--command-result-or-error
-                    program
-                    args
-                    status
-                    output
-                    nil)
-                 (unless (equal last-percent 100)
-                   (git-overleaf--curl-download-progress-message
-                    progress-label
-                    100))))))
-        (when (and process (process-live-p process))
-          (ignore-errors (delete-process process)))
-        (when process
-          (git-overleaf--async-unregister-process process))))
+    (unwind-protect
+        (setq
+         result
+         (progn
+           (git-overleaf--curl-download-progress-message progress-label 0)
+           (setq process
+                 (make-process
+                  :name "git-overleaf-curl-download"
+                  :buffer nil
+                  :command (cons program args)
+                  :connection-type 'pipe
+                  :noquery t
+                  :filter (lambda (_proc string)
+                            (git-overleaf--with-optional-mutex mutex
+                              (push string output-chunks)
+                              (setq progress-tail
+                                    (concat progress-tail string))
+                              (when (> (length progress-tail) 200)
+                                (setq progress-tail
+                                      (substring progress-tail
+                                                 (- (length progress-tail)
+                                                    200))))
+                              (when-let* ((percent
+                                           (git-overleaf--curl-download-progress-percent
+                                            progress-tail)))
+                                (unless (equal percent last-percent)
+                                  (setq last-percent percent)
+                                  (git-overleaf--curl-download-progress-message
+                                   progress-label
+                                   percent)))))
+                  :sentinel (lambda (proc _event)
+                              (when (memq (process-status proc)
+                                          '(exit signal))
+                                (git-overleaf--with-optional-mutex mutex
+                                  (unless done
+                                    (setq status
+                                          (process-exit-status proc))
+                                    (setq done t)))))))
+           (git-overleaf--async-register-process process)
+           (while (not done)
+             (accept-process-output process 0.05)
+             (when (fboundp 'thread-yield)
+               (thread-yield)))
+           (let ((output nil))
+             (git-overleaf--with-optional-mutex mutex
+               (setq output
+                     (string-trim-right
+                      (apply #'concat (nreverse output-chunks)))))
+             (prog1
+                 (git-overleaf--command-result-or-error
+                  program
+                  args
+                  status
+                  output
+                  nil)
+               (unless (equal last-percent 100)
+                 (git-overleaf--curl-download-progress-message
+                  progress-label
+                  100))))))
+      (when (and process (process-live-p process))
+        (ignore-errors (delete-process process)))
+      (when process
+        (git-overleaf--async-unregister-process process)))
     result))
 
 (defun git-overleaf--curl-download
