@@ -145,7 +145,31 @@
     (should (equal (git-overleaf--curl-download-timeout-args)
                    '("--max-time" "10"
                      "--speed-limit" "256"
-                     "--speed-time" "5"))))
+                     "--speed-time" "5")))
+    (should (member "--silent" (git-overleaf--curl-download-base-args)))
+    (should-not (member "--silent"
+                        (git-overleaf--curl-download-base-args t)))
+    (should (member "--progress-bar"
+                    (git-overleaf--curl-download-base-args t))))
+  (should (equal (git-overleaf--curl-download-args
+                  "https://example.test/project/id/download/zip"
+                  "/tmp/project.zip"
+                  '("Cookie: <redacted>")
+                  t)
+                 '("--fail" "--show-error" "--location" "--progress-bar"
+                   "--connect-timeout" "10"
+                   "--speed-limit" "1024"
+                   "--speed-time" "30"
+                   "-H" "Cookie: <redacted>"
+                   "--output" "/tmp/project.zip"
+                   "https://example.test/project/id/download/zip")))
+  (should (equal (git-overleaf--curl-download-progress-percent
+                  "\r######## 12.3%")
+                 12))
+  (should (equal (git-overleaf--curl-download-progress-percent
+                  "\r#### 9.9%\r######################################################################## 100.0%")
+                 100))
+  (should-not (git-overleaf--curl-download-progress-percent "no progress"))
   (let ((result (make-git-overleaf--command-result
                  :status 22
                  :output "curl: returned error: 403")))

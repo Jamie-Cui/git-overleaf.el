@@ -12,9 +12,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: purcell/setup-emacs@master
+      - uses: cachix/install-nix-action@v31.10.6
         with:
-          version: 29.4
+          github_access_token: ${{ github.token }}
+
+      - name: Install Emacs 29.4
+        run: |
+          nix profile install --accept-flake-config \
+            github:purcell/nix-emacs-ci/868482a78575138aebb1b5c16a9266b95c800f2e#emacs-29-4
+          emacs --version
 
       - name: Install Emacs package dependencies
         run: |
