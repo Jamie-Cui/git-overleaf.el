@@ -27,3 +27,4 @@ cli/build/
 /docs/superpowers/plans/*.md
 /.agent-shell/
 /.qoder/
+/git-overleaf-pkg.el
