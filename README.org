@@ -6,7 +6,8 @@
 
 [[https://github.com/Jamie-Cui/git-overleaf/actions/workflows/test.yml][https://github.com/Jamie-Cui/git-overleaf/actions/workflows/test.yml/badge.svg]]
 [[https://github.com/Jamie-Cui/git-overleaf/actions/workflows/coverage.yml][https://github.com/Jamie-Cui/git-overleaf/actions/workflows/coverage.yml/badge.svg]]
-[[https://melpa.org/#/git-overleaf][https://melpa.org/packages/git-overleaf-badge.svg]]
+[[https://github.com/Jamie-Cui/git-overleaf/actions/workflows/melpazoid.yml/badge.svg][https://github.com/Jamie-Cui/git-overleaf/actions/workflows/melpazoid.yml]]
+[[https://melpa.org/packages/git-overleaf-badge.svg][https://melpa.org/#/git-overleaf]]
 
 Chinese README: [[file:README.zh.org][README.zh.org]]
 
