@@ -55,6 +55,21 @@
                  "my-project-v2-tex"))
   (should (equal (git-overleaf--sanitize-name "---") "")))
 
+(ert-deftest git-overleaf-test-progress-message-is-transient ()
+  (let ((calls nil))
+    (cl-letf (((symbol-function 'message)
+               (lambda (&rest args)
+                 (push (list message-log-max args) calls))))
+      (let ((git-overleaf-log-echo t))
+        (git-overleaf--progress-message "Uploading %s... %d%%" "project" 50))
+      (should
+       (equal calls
+              '((nil ("%s" "[git-overleaf] Uploading project... 50%")))))
+      (setq calls nil)
+      (let ((git-overleaf-log-echo nil))
+        (git-overleaf--progress-message "Hidden"))
+      (should-not calls))))
+
 (ert-deftest git-overleaf-test-redact-command-data ()
   (should (equal (git-overleaf--redact-sensitive-argument
                   "Cookie: session=secret")
@@ -84,6 +99,9 @@
     (should (equal (git-overleaf--normalize-cookie-entry
                     '("WWW.OVERLEAF.COM" "sid=1" 123))
                    '("www.overleaf.com" "sid=1" 123)))
+    (should (equal (git-overleaf--normalize-cookie-entry
+                    '("www.overleaf.com" "sid=1" 2000000000000))
+                   '("www.overleaf.com" "sid=1" 2000000000)))
     (should (equal (git-overleaf--normalize-cookie-entry
                     '("www.overleaf.com" "sid=1"))
                    '("www.overleaf.com" "sid=1" nil)))
@@ -128,7 +146,14 @@
       (should-error (git-overleaf--get-cookies) :type 'user-error)
       (should (string-match-p
                "not set locally"
-               (git-overleaf--authentication-needed-reason))))))
+               (git-overleaf--authentication-needed-reason)))))
+  (let* ((now (time-convert nil 'integer))
+         (git-overleaf--current-cookies
+          `(("www.overleaf.com" "sid=expired" ,(* (- now 3600) 1000))))
+         (git-overleaf-cookies nil))
+    (git-overleaf-test--with-url "https://www.overleaf.com"
+      (should (eq (plist-get (git-overleaf--cookie-state) :status)
+                  'expired)))))
 
 (ert-deftest git-overleaf-test-curl-helper-arguments ()
   (should (equal (git-overleaf--format-curl-headers
@@ -311,6 +336,35 @@
     (should-error (git-overleaf--remote-doc-state nil "doc")
                   :type 'user-error)))
 
+(ert-deftest git-overleaf-test-update-doc-text-omits-server-source-metadata ()
+  (let ((states '((:version 7 :text "old")
+                  (:version 8 :text "new")))
+        (emitted nil))
+    (cl-letf (((symbol-function 'git-overleaf--socketio-call)
+               (lambda (_project-id function)
+                 (funcall function 'client nil)))
+              ((symbol-function 'git-overleaf--remote-doc-state)
+               (lambda (_client _doc-id)
+                 (prog1 (car states)
+                   (setq states (cdr states)))))
+              ((symbol-function 'git-overleaf--socketio-emit)
+               (lambda (_client name &rest args)
+                 (push (cons name args) emitted)
+                 '(nil)))
+              ((symbol-function 'git-overleaf--wait-doc-update-applied)
+               (lambda (&rest _args) t))
+              ((symbol-function 'git-overleaf--message)
+               (lambda (&rest _args) nil)))
+      (should (git-overleaf--update-doc-text-content
+               "project-id" "doc-id" "old" "new"))
+      (should
+       (equal
+        (nreverse emitted)
+        '(("applyOtUpdate"
+           "doc-id"
+           (:doc "doc-id" :op [(:d "old" :p 0) (:i "new" :p 0)]
+                 :v 7))))))))
+
 (ert-deftest git-overleaf-test-entity-table-helpers ()
   (let* ((root '(:name "rootFolder"
                  :_id "root"
@@ -393,6 +447,12 @@
   (should-not (git-overleaf-firefox--cookie-expired-p
                '("connect.sid" "value" ".overleaf.com" "/" 0)
                10))
+  (should (git-overleaf-firefox--cookie-expired-p
+           '("connect.sid" "value" ".overleaf.com" "/" 1999999999000)
+           2000000000))
+  (should-not (git-overleaf-firefox--cookie-expired-p
+               '("connect.sid" "value" ".overleaf.com" "/" 2000000001000)
+               2000000000))
   (should (git-overleaf-firefox--session-cookie-p
            '("connect.sid" "value" ".overleaf.com" "/" 100)))
   (should-not (git-overleaf-firefox--session-cookie-p
@@ -409,7 +469,11 @@
                   '(("connect.sid" "a" ".overleaf.com" "/" 50)
                     ("overleaf_session2" "b" ".overleaf.com" "/" 40)
                     ("GCLB" "lb" ".overleaf.com" "/" 10)))
-                 40)))
+                 40))
+  (should (equal (git-overleaf-firefox--session-expiry
+                  '(("overleaf_session2" "b" ".overleaf.com" "/"
+                     2000000000123)))
+                 2000000000)))
 
 (ert-deftest git-overleaf-test-firefox-full-cookies-from-rows ()
   (let* ((now (time-convert nil 'integer))
@@ -436,6 +500,22 @@
                      `(("connect.sid" "session" ".www.overleaf.com" "/"
                         ,(- now 100)))
                      "/tmp/profile")
-                    :type 'user-error))))
+                    :type 'user-error)
+      (should-error (git-overleaf-firefox--full-cookies-from-rows
+                     `(("overleaf_session2" "session" ".overleaf.com" "/"
+                        ,(* (- now 100) 1000)))
+                     "/tmp/profile")
+                    :type 'user-error)))
+  (let ((future (+ (time-convert nil 'integer) 3600)))
+    (git-overleaf-test--with-url "https://www.overleaf.com"
+      (should
+       (equal
+        (git-overleaf-firefox--full-cookies-from-rows
+         `(("overleaf_session2" "session" ".overleaf.com" "/"
+            ,(* future 1000)))
+         "/tmp/profile")
+        `(("www.overleaf.com"
+           "overleaf_session2=session"
+           ,future)))))))
 
 ;;; git-overleaf-test.el ends here

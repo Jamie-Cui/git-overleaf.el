@@ -714,6 +714,18 @@ read."
        (insert cookies)))
     (_ nil)))
 
+(defconst git-overleaf--cookie-expiry-millisecond-threshold 100000000000
+  "Cookie expiry values at or above this are Unix milliseconds.")
+
+(defun git-overleaf--cookie-expiry-seconds (expiry)
+  "Return cookie EXPIRY normalized to Unix seconds.
+Older Firefox profiles and webdriver use seconds, while newer Firefox
+profiles store cookie expiry timestamps in milliseconds."
+  (if (and (integerp expiry)
+           (>= expiry git-overleaf--cookie-expiry-millisecond-threshold))
+      (/ expiry 1000)
+    expiry))
+
 (defun git-overleaf--normalize-cookie-entry (entry)
   "Normalize one cookie ENTRY into `(DOMAIN COOKIE-STRING EXPIRY)'."
   (pcase entry
@@ -722,7 +734,9 @@ read."
                   (stringp cookie-string)
                   (or (null expiry) (integerp expiry)))
        (error "Invalid Overleaf cookie entry: %S" entry))
-     (list (downcase domain) cookie-string expiry))
+     (list (downcase domain)
+           cookie-string
+           (git-overleaf--cookie-expiry-seconds expiry)))
     (`(,domain ,cookie-string)
      (unless (and (stringp domain) (stringp cookie-string))
        (error "Invalid Overleaf cookie entry: %S" entry))
@@ -800,11 +814,13 @@ does not contact the Overleaf server."
            (git-overleaf--cookie-key-candidates)))
          (now (time-convert nil 'integer)))
     (if entry
-        (pcase-let ((`(,value ,validity) entry))
-          (if (or (not validity) (< now validity))
-              `(:status valid :value ,value :validity ,validity)
-            (setq git-overleaf--current-cookies nil)
-            `(:status expired :validity ,validity)))
+        (pcase-let ((`(,value ,raw-validity) entry))
+          (let ((validity
+                 (git-overleaf--cookie-expiry-seconds raw-validity)))
+            (if (or (not validity) (< now validity))
+                `(:status valid :value ,value :validity ,validity)
+              (setq git-overleaf--current-cookies nil)
+              `(:status expired :validity ,validity))))
       (setq git-overleaf--current-cookies nil)
       '(:status missing))))
 

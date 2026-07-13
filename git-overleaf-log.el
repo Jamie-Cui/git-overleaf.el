@@ -206,6 +206,16 @@ FORMAT-STRING and ARGS are passed to `format' to build the log text."
   "Log an Overleaf info message using FORMAT-STRING and ARGS."
   (git-overleaf-log--emit 'info "" format-string args))
 
+(defun git-overleaf--progress-message (format-string &rest args)
+  "Echo transient Overleaf progress using FORMAT-STRING and ARGS.
+Progress is shown only when `git-overleaf-log-echo' is non-nil and is
+not recorded in either the project log or `*Messages*'."
+  (when git-overleaf-log-echo
+    (let ((message-log-max nil))
+      (message "%s"
+               (concat "[git-overleaf] "
+                       (apply #'format format-string args))))))
+
 (defun git-overleaf--warn (format-string &rest args)
   "Log an Overleaf warning using FORMAT-STRING and ARGS."
   (git-overleaf-log--emit 'warn "WARNING: " format-string args))

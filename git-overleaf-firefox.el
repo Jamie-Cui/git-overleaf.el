@@ -195,7 +195,7 @@ cookies."
 
 (defun git-overleaf-firefox--cookie-expired-p (row now)
   "Return non-nil if Firefox cookie ROW is expired at NOW."
-  (let ((expiry (nth 4 row)))
+  (let ((expiry (git-overleaf--cookie-expiry-seconds (nth 4 row))))
     (and (integerp expiry)
          (> expiry 0)
          (<= expiry now))))
@@ -226,7 +226,7 @@ cookies."
   (let ((expiries
          (cl-loop
           for row in rows
-          for expiry = (nth 4 row)
+          for expiry = (git-overleaf--cookie-expiry-seconds (nth 4 row))
           when (and (git-overleaf-firefox--session-cookie-p row)
                     (integerp expiry)
                     (> expiry 0))

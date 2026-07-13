@@ -211,7 +211,11 @@ the default Firefox profile:
 
 This backend reads =profiles.ini=, imports only cookies for the current
 ~git-overleaf-url~, and fails with an explicit message if no valid
-Overleaf session cookie is found.  To bypass profile discovery:
+Overleaf session cookie is found.  It supports both expiry timestamps in
+seconds used by older Firefox versions and timestamps in milliseconds used
+by newer versions.  If Overleaf rejects a saved session,
+project discovery asks you to log in again and rerun
+~git-overleaf-authenticate~.  To bypass profile discovery:
 
 #+begin_src elisp
   (setopt git-overleaf-firefox-profile "/path/to/firefox/profile")
@@ -311,7 +315,9 @@ Its behavior is:
 For existing remote Overleaf text documents, changed UTF-8 text is
 updated through Overleaf's real-time ShareJS text OT path.  This
 preserves the remote document id and produces normal Overleaf web
-history entries.  Changed binary files, newly added files, type
+history entries.  Source metadata is assigned by Overleaf's real-time
+service rather than supplied by the client.  Changed binary files, newly
+added files, type
 conflicts, and deleted entries use Overleaf's upload and delete APIs.
 
 If a remote document cannot be updated through supported text OT, for
@@ -352,7 +358,15 @@ This recovery command uses the same local preparation as
 contents with the local ~HEAD~ snapshot.  Existing remote text documents
 are still updated through text OT when supported; other entries use
 Overleaf upload and delete APIs.  Use this command only when the local
-state is intended to replace the remote state.
+state is intended to replace the remote state.  The interactive command
+always asks for confirmation.
+
+A successful overwrite also abandons and clears a pending Overleaf pull,
+so this command is the recovery path after a pull was manually aborted or
+its pending metadata became stale.  It never aborts a Git merge or discards
+unresolved conflicts automatically: first resolve and commit the merge, or
+run ~git merge --abort~, then run the overwrite again.  If the overwrite
+fails, the pending state is retained so it can be retried safely.
 
 ** Conflict handling
 
@@ -366,6 +380,12 @@ If the merge conflicts:
 - resolve conflicts with Magit or plain Git;
 - create the merge commit;
 - run ~git-overleaf-push~ to upload the merged result.
+
+To abandon the pull and keep the local version instead, resolve the
+conflicts or run ~git merge --abort~, then run
+~git-overleaf-overwrite-remote~.  This explicitly replaces Overleaf with
+the resulting local ~HEAD~ and clears the pending pull only after a
+successful overwrite.
 
 Conflict resolution is intentionally handled by Git rather than by ediff.
 
@@ -429,10 +449,21 @@ Cancellation interrupts external processes where possible, clears async
 locks, and drops pending foreground callbacks.  Work already completed
 locally or remotely is not rolled back.
 
-* Download Progress and Proxy Environment
+* Download and Upload Progress
 
 Snapshot downloads echo curl progress in the minibuffer as
 =Downloading project ... N%= when ~git-overleaf-log-echo~ is non-nil.
+
+Push and overwrite operations report the completed content mutations and
+the current path as =Uploading content for project ... N% (I/T: ACTION PATH)=.  This
+is operation progress rather than a byte count because one push may mix
+text OT updates, multipart uploads, folder creation, and deletion.  A
+single slow operation can therefore remain at the same percentage until
+that remote request completes.  After content reaches 100%, a separate
+message identifies sync-metadata finalization.  Progress messages are
+transient and are not added to the project log or =*Messages*=.
+
+** Proxy environment
 
 Downloads are performed by ~git-overleaf-curl-executable~, so proxy
 configuration comes from Emacs' ~process-environment~, not necessarily

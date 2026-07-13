@@ -64,7 +64,8 @@
   (declare (indent 0) (debug t))
   `(let ((events nil)
          (folder-counter 0)
-         (upload-counter 0))
+         (upload-counter 0)
+         (git-overleaf-log-echo nil))
      (cl-letf (((symbol-function 'git-overleaf--create-folder)
                 (lambda (project-id parent-id name)
                   (setq folder-counter (1+ folder-counter))
@@ -203,6 +204,88 @@
           (let ((events (nreverse events)))
             (should (equal (mapcar #'car events) '(:update-doc)))
             (should (equal (nth 2 (car events)) "doc-1"))))))))
+
+(ert-deftest git-overleaf-sync-tree-test-upload-progress-counts-mutations ()
+  (git-overleaf-sync-tree-test--with-temp-dir local-root
+    (git-overleaf-sync-tree-test--with-temp-dir remote-root
+      (git-overleaf-sync-tree-test--write-file
+       local-root
+       "asset"
+       "new file\n")
+      (let ((remote-table
+             (git-overleaf-sync-tree-test--root-table))
+            (progress-messages nil))
+        (git-overleaf-sync-tree-test--put-entity
+         remote-table "asset" "folder-1" 'folder)
+        (git-overleaf-sync-tree-test--put-entity
+         remote-table "asset/child.tex" "child-1" 'doc "folder-1")
+        (git-overleaf-sync-tree-test--put-entity
+         remote-table "old.txt" "old-1" 'file)
+        (git-overleaf-sync-tree-test--with-remote-stubs
+          (cl-letf (((symbol-function 'git-overleaf--progress-message)
+                     (lambda (format-string &rest args)
+                       (push (apply #'format format-string args)
+                             progress-messages))))
+            (git-overleaf--sync-local-tree
+             "project-id"
+             local-root
+             remote-root
+             remote-table))
+          (should
+           (equal
+            (nreverse progress-messages)
+            '("Uploading content for project project-id... 0% (1/3: deleting asset)"
+              "Uploading content for project project-id... 33% (2/3: uploading asset)"
+              "Uploading content for project project-id... 66% (3/3: deleting old.txt)"
+              "Uploading content for project project-id... 100%"))))))))
+
+(ert-deftest git-overleaf-sync-tree-test-upload-progress-stops-on-error ()
+  (git-overleaf-sync-tree-test--with-temp-dir local-root
+    (git-overleaf-sync-tree-test--with-temp-dir remote-root
+      (git-overleaf-sync-tree-test--write-file local-root "a.tex" "a\n")
+      (git-overleaf-sync-tree-test--write-file local-root "b.tex" "b\n")
+      (let ((remote-table
+             (git-overleaf-sync-tree-test--root-table))
+            (progress-messages nil)
+            (uploads 0))
+        (git-overleaf-sync-tree-test--with-remote-stubs
+          (cl-letf (((symbol-function 'git-overleaf--progress-message)
+                     (lambda (format-string &rest args)
+                       (push (apply #'format format-string args)
+                             progress-messages)))
+                    ((symbol-function 'git-overleaf--curl-upload-file)
+                     (lambda (&rest _args)
+                       (cl-incf uploads)
+                       (if (= uploads 1)
+                           '(:entity_id "uploaded-1" :entity_type "doc")
+                         (error "upload failed")))))
+            (should-error
+             (git-overleaf--sync-local-tree
+              "project-id"
+              local-root
+              remote-root
+              remote-table)))
+          (should
+           (equal
+            (nreverse progress-messages)
+            '("Uploading content for project project-id... 0% (1/2: uploading a.tex)"
+              "Uploading content for project project-id... 50% (2/2: uploading b.tex)"))))))))
+
+(ert-deftest git-overleaf-sync-tree-test-upload-progress-skips-empty-plan ()
+  (git-overleaf-sync-tree-test--with-temp-dir local-root
+    (git-overleaf-sync-tree-test--with-temp-dir remote-root
+      (let ((remote-table
+             (git-overleaf-sync-tree-test--root-table))
+            (progress-messages nil))
+        (cl-letf (((symbol-function 'git-overleaf--progress-message)
+                   (lambda (&rest args)
+                     (push args progress-messages))))
+          (git-overleaf--sync-local-tree
+           "project-id"
+           local-root
+           remote-root
+           remote-table))
+        (should-not progress-messages)))))
 
 (ert-deftest git-overleaf-sync-tree-test-replaces-remote-folder-with-file ()
   (git-overleaf-sync-tree-test--with-temp-dir local-root

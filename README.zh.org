@@ -188,8 +188,10 @@ Overleaf。即使有旧的 =geckodriver= 进程占用默认端口 =4444=，也�
 #+end_src
 
 该后端会读取 =profiles.ini=，只导入当前 ~git-overleaf-url~ 对应的
-cookies，并在找不到有效 Overleaf session cookie 时给出明确失败信息。若要
-跳过 profile 自动发现：
+cookies，并在找不到有效 Overleaf session cookie 时给出明确失败信息。它同时
+支持旧版 Firefox 使用的秒级过期时间和新版 Firefox 使用的毫秒级过期时间。
+如果 Overleaf 拒绝已保存的会话，项目发现会提示重新登录并再次运行
+~git-overleaf-authenticate~。若要跳过 profile 自动发现：
 
 #+begin_src elisp
   (setopt git-overleaf-firefox-profile "/path/to/firefox/profile")
@@ -282,8 +284,9 @@ M-x git-overleaf-push
 
 对于远端已有的 Overleaf 文本文档，发生变化的 UTF-8 文本会通过 Overleaf 的
 实时 ShareJS 文本 OT 路径更新。这样会保留远端文档 id，并在 Overleaf Web
-端生成正常的历史记录。发生变化的二进制文件、新增文件、类型冲突和删除条
-目会使用 Overleaf 上传和删除 API。
+端生成正常的历史记录。更新来源元数据由 Overleaf 实时服务分配，而不是由
+客户端提供。发生变化的二进制文件、新增文件、类型冲突和删除条目会使用
+Overleaf 上传和删除 API。
 
 如果某个远端文档无法通过当前支持的文本 OT 更新，例如它不是合法 UTF-8、使
 用 Overleaf 较新的 ~history-ot~ 类型，或在下载快照后又被远端修改，push 会
@@ -320,7 +323,13 @@ M-x git-overleaf-overwrite-remote
 这是一个恢复命令。它使用与 ~git-overleaf-push~ 相同的本地准备流程，但
 总是用本地 ~HEAD~ 快照替换远端 Overleaf 项目内容。已有远端文本文档在支持
 时仍会通过文本 OT 更新；其他条目使用 Overleaf 上传和删除 API。只有在确实
-希望本地状态替换远端状态时才应使用该命令。
+希望本地状态替换远端状态时才应使用该命令。交互式运行时总会要求确认。
+
+成功覆盖还会放弃并清除 pending Overleaf pull，因此手动中止 pull 的 merge
+或 pending 元数据过期时，可以用该命令恢复。命令不会自动中止 Git merge，
+也不会自动丢弃未解决的冲突：请先解决并提交 merge，或运行
+~git merge --abort~，再重新执行覆盖。如果覆盖失败，pending 状态会保留，
+以便安全重试。
 
 ** 冲突处理
 
@@ -333,6 +342,11 @@ Git 合并机制，将下载下来的远端快照合并到当前分支。
 - 使用 Magit 或普通 Git 解决冲突；
 - 创建 merge commit；
 - 运行 ~git-overleaf-push~ 上传合并结果。
+
+如果要放弃这次 pull 并保留本地版本，请先解决冲突或运行
+~git merge --abort~，再运行 ~git-overleaf-overwrite-remote~。该命令会明确
+使用随后得到的本地 ~HEAD~ 替换 Overleaf，并且只在覆盖成功后清除 pending
+pull。
 
 冲突处理有意交给 Git，而不是 ediff。
 
@@ -387,10 +401,18 @@ M-x git-overleaf-force-stop
 取消会尽可能中断外部进程、清理 async 锁，并丢弃尚未执行的前台回调。已
 经在本地或远端完成的工作不会自动回滚。
 
-* 下载进度与代理环境
+* 下载与上传进度
 
 快照下载会在 ~git-overleaf-log-echo~ 为非 nil 时，在 minibuffer 中显示
 =Downloading project ... N%= 形式的 curl 进度。
+
+push 和 overwrite 会用 =Uploading content for project ... N% (I/T: ACTION PATH)=
+显示已完成的内容变更操作数和当前路径。这是操作级而不是字节级进度，因为一次 push
+可能混合文本 OT 更新、multipart 上传、创建目录和删除操作。因此单个较慢的
+远端请求完成前，百分比可能暂时不变。内容达到 100% 后，会用另一条提示标明
+sync metadata 正在收尾。进度提示是临时的，不会写入项目日志或 =*Messages*=。
+
+** 代理环境
 
 下载由 ~git-overleaf-curl-executable~ 指定的 curl 执行，因此代理配置来自
 Emacs 的 ~process-environment~，不一定等同于运行 =emacsclient= 的 shell。

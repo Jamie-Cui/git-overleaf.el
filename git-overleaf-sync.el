@@ -352,45 +352,167 @@ changes without prompting, and `error' signals a user error."
 
 ;;;; Project sync internals
 
-(defun git-overleaf--sync-local-tree
-    (project-id local-root remote-root remote-table)
-  "Synchronize LOCAL-ROOT into PROJECT-ID using REMOTE-ROOT and REMOTE-TABLE."
+(cl-defstruct git-overleaf--upload-progress
+  "Progress for one sequence of remote Overleaf mutations."
+  project-id
+  total
+  (completed 0))
+
+(defun git-overleaf--upload-progress-current (progress action path)
+  "Show PROGRESS before performing ACTION on remote PATH."
+  (when progress
+    (let ((completed (git-overleaf--upload-progress-completed progress))
+          (total (git-overleaf--upload-progress-total progress)))
+      (git-overleaf--progress-message
+       "Uploading content for project %s... %d%% (%d/%d: %s %s)"
+       (git-overleaf--upload-progress-project-id progress)
+       (floor (* 100.0 (/ (float completed) total)))
+       (1+ completed)
+       total
+       action
+       path))))
+
+(defun git-overleaf--upload-progress-advance (progress)
+  "Advance PROGRESS after one successful remote mutation."
+  (when progress
+    (cl-incf (git-overleaf--upload-progress-completed progress))
+    (when (= (git-overleaf--upload-progress-completed progress)
+             (git-overleaf--upload-progress-total progress))
+      (git-overleaf--progress-message
+       "Uploading content for project %s... 100%%"
+       (git-overleaf--upload-progress-project-id progress)))))
+
+(defun git-overleaf--with-upload-progress
+    (progress action path function)
+  "Run FUNCTION as remote ACTION on PATH while updating PROGRESS."
+  (git-overleaf--upload-progress-current progress action path)
+  (prog1 (funcall function)
+    (git-overleaf--upload-progress-advance progress)))
+
+(defun git-overleaf--path-below-any-p (path parents)
+  "Return non-nil when PATH is below one of PARENTS."
+  (cl-some
+   (lambda (parent)
+     (string-prefix-p (concat parent "/") path))
+   parents))
+
+(defun git-overleaf--plan-local-tree-sync
+    (local-root remote-root remote-table)
+  "Plan remote mutations needed to sync LOCAL-ROOT against REMOTE-ROOT.
+REMOTE-TABLE is the current Overleaf entity table."
   (let* ((local-state (git-overleaf--scan-local-tree local-root))
          (local-dirs (plist-get local-state :dirs))
          (local-files (plist-get local-state :files))
          (dir-paths nil)
          (file-paths nil)
+         (changed-files (make-hash-table :test #'equal))
+         (replaced-folders nil)
          (delete-files nil)
-         (delete-folders nil))
+         (delete-folders nil)
+         (total 0))
     (maphash
      (lambda (path _)
        (unless (string-empty-p path)
-         (push path dir-paths)))
+         (push path dir-paths)
+         (let ((remote-entry (gethash path remote-table)))
+           (cond
+            ((not remote-entry)
+             (cl-incf total))
+            ((not (eq (git-overleaf--entity-type remote-entry) 'folder))
+             (cl-incf total 2))))))
      local-dirs)
     (maphash
-     (lambda (path _)
-       (push path file-paths))
+     (lambda (path local-file)
+       (push path file-paths)
+       (let* ((remote-entry (gethash path remote-table))
+              (remote-file (expand-file-name path remote-root))
+              (same-content
+               (and remote-entry
+                    (not (eq (git-overleaf--entity-type remote-entry)
+                             'folder))
+                    (git-overleaf--files-equal-p local-file remote-file))))
+         (unless same-content
+           (puthash path t changed-files)
+           (cond
+            ((and remote-entry
+                  (eq (git-overleaf--entity-type remote-entry) 'doc))
+             (cl-incf total))
+            (remote-entry
+             (when (eq (git-overleaf--entity-type remote-entry) 'folder)
+               (push path replaced-folders))
+             (cl-incf total 2))
+            (t
+             (cl-incf total))))))
      local-files)
+    (maphash
+     (lambda (path entity)
+       (unless (or (string-empty-p path)
+                   (git-overleaf--sync-metadata-path-p path)
+                   (gethash path local-files)
+                   (gethash path local-dirs)
+                   (git-overleaf--path-below-any-p path replaced-folders))
+         (cl-incf total)
+         (if (eq (git-overleaf--entity-type entity) 'folder)
+             (push path delete-folders)
+           (push path delete-files))))
+     remote-table)
+    `(:local-dirs ,local-dirs
+      :local-files ,local-files
+      :dir-paths
+      ,(sort dir-paths
+             (lambda (left right)
+               (< (git-overleaf--path-depth left)
+                  (git-overleaf--path-depth right))))
+      :file-paths ,(sort file-paths #'string<)
+      :changed-files ,changed-files
+      :delete-files
+      ,(sort delete-files
+             (lambda (left right)
+               (> (git-overleaf--path-depth left)
+                  (git-overleaf--path-depth right))))
+      :delete-folders
+      ,(sort delete-folders
+             (lambda (left right)
+               (> (git-overleaf--path-depth left)
+                  (git-overleaf--path-depth right))))
+      :total ,total)))
 
-    (dolist (path
-             (sort dir-paths
-                   (lambda (left right)
-                     (< (git-overleaf--path-depth left)
-                        (git-overleaf--path-depth right)))))
+(defun git-overleaf--sync-local-tree
+    (project-id local-root remote-root remote-table)
+  "Synchronize LOCAL-ROOT into PROJECT-ID using REMOTE-ROOT and REMOTE-TABLE."
+  (let* ((plan (git-overleaf--plan-local-tree-sync
+                local-root remote-root remote-table))
+         (local-files (plist-get plan :local-files))
+         (progress
+          (when (> (plist-get plan :total) 0)
+            (make-git-overleaf--upload-progress
+             :project-id project-id
+             :total (plist-get plan :total)))))
+    (dolist (path (plist-get plan :dir-paths))
       (let ((remote-entry (gethash path remote-table)))
         (when remote-entry
           (unless (eq (git-overleaf--entity-type remote-entry) 'folder)
-            (git-overleaf--delete-entity project-id remote-entry)
+            (git-overleaf--with-upload-progress
+             progress
+             "deleting"
+             path
+             (lambda ()
+               (git-overleaf--delete-entity project-id remote-entry)))
             (git-overleaf--forget-entry remote-table path)
             (setq remote-entry nil)))
         (unless remote-entry
           (let* ((parent-path (git-overleaf--parent-path path))
                  (parent-entry (gethash parent-path remote-table))
                  (created
-                  (git-overleaf--create-folder
-                   project-id
-                   (git-overleaf--entity-id parent-entry)
-                   (file-name-nondirectory path))))
+                  (git-overleaf--with-upload-progress
+                   progress
+                   "creating folder"
+                   path
+                   (lambda ()
+                     (git-overleaf--create-folder
+                      project-id
+                      (git-overleaf--entity-id parent-entry)
+                      (file-name-nondirectory path))))))
             (puthash
              path
              (make-git-overleaf--entity
@@ -401,33 +523,43 @@ changes without prompting, and `error' signals a user error."
               :parent-id (git-overleaf--entity-id parent-entry))
              remote-table)))))
 
-    (dolist (path (sort file-paths #'string<))
+    (dolist (path (plist-get plan :file-paths))
       (let* ((local-file (gethash path local-files))
-             (remote-entry (gethash path remote-table))
-             (remote-file (expand-file-name path remote-root))
-             (same-content
-              (and remote-entry
-                   (not (eq (git-overleaf--entity-type remote-entry) 'folder))
-                   (git-overleaf--files-equal-p local-file remote-file))))
-        (unless same-content
+             (remote-entry (gethash path remote-table)))
+        (when (gethash path (plist-get plan :changed-files))
           (if (and remote-entry
                    (eq (git-overleaf--entity-type remote-entry) 'doc))
-              (git-overleaf--update-doc-text
-               project-id
-               (git-overleaf--entity-id remote-entry)
-               local-file
-               remote-file)
+              (git-overleaf--with-upload-progress
+               progress
+               "updating"
+               path
+               (lambda ()
+                 (git-overleaf--update-doc-text
+                  project-id
+                  (git-overleaf--entity-id remote-entry)
+                  local-file
+                  (expand-file-name path remote-root))))
             (when remote-entry
-              (git-overleaf--delete-entity project-id remote-entry)
+              (git-overleaf--with-upload-progress
+               progress
+               "deleting"
+               path
+               (lambda ()
+                 (git-overleaf--delete-entity project-id remote-entry)))
               (git-overleaf--forget-entry remote-table path))
             (let* ((parent-path (git-overleaf--parent-path path))
                    (parent-entry (gethash parent-path remote-table))
                    (response
-                    (git-overleaf--curl-upload-file
-                     project-id
-                     (git-overleaf--entity-id parent-entry)
-                     (file-name-nondirectory path)
-                     local-file))
+                    (git-overleaf--with-upload-progress
+                     progress
+                     "uploading"
+                     path
+                     (lambda ()
+                       (git-overleaf--curl-upload-file
+                        project-id
+                        (git-overleaf--entity-id parent-entry)
+                        (file-name-nondirectory path)
+                        local-file))))
                    (entity-type
                     (pcase (plist-get response :entity_type)
                       ("doc" 'doc)
@@ -442,39 +574,31 @@ changes without prompting, and `error' signals a user error."
                 :parent-id (git-overleaf--entity-id parent-entry))
                remote-table))))))
 
-    (maphash
-     (lambda (path entity)
-       (unless (string-empty-p path)
-         (unless (or (git-overleaf--sync-metadata-path-p path)
-                     (gethash path local-files)
-                     (gethash path local-dirs))
-           (if (eq (git-overleaf--entity-type entity) 'folder)
-               (push path delete-folders)
-             (push path delete-files)))))
-     remote-table)
-
-    (dolist (path
-             (sort delete-files
-                   (lambda (left right)
-                     (> (git-overleaf--path-depth left)
-                        (git-overleaf--path-depth right)))))
+    (dolist (path (plist-get plan :delete-files))
       (when-let* ((entity (gethash path remote-table)))
-        (git-overleaf--delete-entity project-id entity)
+        (git-overleaf--with-upload-progress
+         progress
+         "deleting"
+         path
+         (lambda ()
+           (git-overleaf--delete-entity project-id entity)))
         (remhash path remote-table)))
 
-    (dolist (path
-             (sort delete-folders
-                   (lambda (left right)
-                     (> (git-overleaf--path-depth left)
-                        (git-overleaf--path-depth right)))))
+    (dolist (path (plist-get plan :delete-folders))
       (when-let* ((entity (gethash path remote-table)))
-        (git-overleaf--delete-entity project-id entity)
+        (git-overleaf--with-upload-progress
+         progress
+         "deleting"
+         path
+         (lambda ()
+           (git-overleaf--delete-entity project-id entity)))
         (git-overleaf--forget-entry remote-table path)))))
 
 (defun git-overleaf--upload-sync-metadata
     (repo revision project-id remote-table)
   "Update sync metadata for REVISION in REPO on PROJECT-ID."
   (when git-overleaf-sync-metadata-enabled
+    (git-overleaf--progress-message "Finalizing Overleaf sync metadata...")
     (condition-case err
         (let* ((path (git-overleaf--sync-metadata-relative-path))
                (root-entry (gethash "" remote-table))
@@ -618,9 +742,40 @@ not modify the working tree or perform a pull/push."
   "Signal if REPO still has a pending Overleaf sync before COMMAND."
   (when-let* ((pending (git-overleaf--pending-state repo)))
     (user-error
-     "Pending Overleaf %s exists; finish it before %s"
+     "Repository %s has a pending Overleaf %s; finish it before %s"
+     repo
      (plist-get pending :action)
      command)))
+
+(defun git-overleaf--overwrite-pending-state (repo)
+  "Return REPO's supported pending state before a remote overwrite.
+Signal when the pending action is not one that overwrite knows how to
+abandon safely."
+  (when-let* ((pending (git-overleaf--pending-state repo)))
+    (unless (eq (plist-get pending :action) 'pull)
+      (user-error
+       "Repository %s has unsupported pending Overleaf action `%s'"
+       repo
+       (plist-get pending :action)))
+    pending))
+
+(defun git-overleaf--signal-pending-pull (repo)
+  "Explain how to finish or abandon REPO's pending Overleaf pull."
+  (if (or (git-overleaf--merge-in-progress-p repo)
+          (git-overleaf--repo-status-unmerged
+           (git-overleaf--read-repo-status repo)))
+      (user-error
+       (concat
+        "Repository %s has a pending Overleaf pull and an active Git merge; "
+        "resolve and commit it, then run `git-overleaf-push', or abort it and "
+        "run `git-overleaf-overwrite-remote' to keep local content")
+       repo)
+    (user-error
+     (concat
+      "Repository %s has pending Overleaf pull metadata, but no Git merge is active; "
+      "run `git-overleaf-push' if the merge was already committed, or run "
+      "`git-overleaf-overwrite-remote' to abandon the pull and keep local content")
+     repo)))
 
 (defun git-overleaf--ensure-pending-remote-unchanged
     (repo remote-root remote-tree action)
@@ -631,8 +786,7 @@ not modify the working tree or perform a pull/push."
              (git-overleaf--tree-id repo current-remote-commit)
              remote-tree)
       (user-error
-       "The remote project changed again while the %s branch was pending; start a new %s"
-       action
+       "The remote project changed again while the pending %s was being finalized; run `git-overleaf-overwrite-remote' to keep local content"
        action))
     current-remote-commit))
 
@@ -662,13 +816,13 @@ PENDING must have action=pull and a valid remote-commit.
 REMOTE-ROOT and REMOTE-TABLE describe the current remote state."
   (let* ((remote-commit (plist-get pending :remote-commit)))
     (unless remote-commit
-      (user-error "Pending pull metadata is incomplete"))
+      (user-error
+       "Pending pull metadata is incomplete; run `git-overleaf-overwrite-remote' to abandon it and keep local content"))
     (let* ((head (git-overleaf--rev-parse repo "HEAD"))
            (project-id (git-overleaf--project-id repo))
            (remote-tree (git-overleaf--tree-id repo remote-commit)))
       (unless (git-overleaf--is-ancestor-p repo remote-commit head)
-        (user-error
-         "Merge is not complete; resolve conflicts and commit before pushing"))
+        (git-overleaf--signal-pending-pull repo))
       (git-overleaf--ensure-pending-remote-unchanged
        repo remote-root remote-tree 'pull)
       (git-overleaf--upload-head-and-set-base

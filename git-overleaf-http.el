@@ -191,11 +191,10 @@ When PROGRESS is non-nil, ask curl to emit progress output."
 
 (defun git-overleaf--curl-download-progress-message (label percent)
   "Echo download progress for LABEL at PERCENT without logging it."
-  (when git-overleaf-log-echo
-    (message "%s"
-             (format "[git-overleaf] Downloading %s... %d%%"
-                     label
-                     percent))))
+  (git-overleaf--progress-message
+   "Downloading %s... %d%%"
+   label
+   percent))
 
 (defmacro git-overleaf--with-optional-mutex (mutex &rest body)
   "Evaluate BODY while holding MUTEX when MUTEX is non-nil."
@@ -459,23 +458,47 @@ The response body is discarded."
 
 ;;;; Project discovery
 
+(defun git-overleaf--signal-rejected-session ()
+  "Signal an actionable error for cookies rejected by Overleaf."
+  (user-error
+   "Overleaf rejected the saved session cookies for %s; the session may have expired.  Log in to Overleaf again, run `git-overleaf-authenticate', then retry"
+   (git-overleaf--url-host)))
+
+(defun git-overleaf--login-page-p (page)
+  "Return non-nil when PAGE contains an Overleaf login form."
+  (and (stringp page)
+       (string-match-p
+        "action=[\"'][^\"']*/login\\(?:[?\"']\\)"
+        page)))
+
 (defun git-overleaf-list (&optional url)
   "Return the list of accessible Overleaf projects for URL."
   (setq git-overleaf-url (or url (git-overleaf--url)))
   (let* ((cookies (git-overleaf--get-cookies))
          (project-page
-          (git-overleaf--curl-request
-           "GET"
-           (format "%s/project" (git-overleaf--url))
-           (git-overleaf--format-curl-headers
-            `(("Cookie" . ,cookies)
-              ("Origin" . ,(git-overleaf--url))))))
+          (condition-case err
+              (git-overleaf--curl-request
+               "GET"
+               (format "%s/project" (git-overleaf--url))
+               (git-overleaf--format-curl-headers
+                `(("Cookie" . ,cookies)
+                  ("Origin" . ,(git-overleaf--url))
+                  ("Accept" . "application/json"))))
+            (error
+             (if (string-match-p
+                  "returned error: 401"
+                  (error-message-string err))
+                 (git-overleaf--signal-rejected-session)
+               (signal (car err) (cdr err))))))
          (projects-json
           (save-match-data
             (unless (string-match
                      "name=\"ol-prefetchedProjectsBlob\".*?content=\"\\(.*?\\)\""
                      project-page)
-              (user-error "Could not find project list on %s" (git-overleaf--url)))
+              (if (git-overleaf--login-page-p project-page)
+                  (git-overleaf--signal-rejected-session)
+                (user-error "Could not find project list on %s"
+                            (git-overleaf--url))))
             (json-parse-string
              (url-unhex-string
               (mm-url-decode-entities-string (match-string 1 project-page)))
@@ -932,8 +955,7 @@ the remote document id and Overleaf edit history are preserved."
                   doc-id
                   `(:doc ,doc-id
                          :op ,op
-                         :v ,version
-                         :meta (:source "git-overleaf"))))
+                         :v ,version)))
            (when-let* ((error-object (car ack)))
              (user-error
               "Could not update Overleaf doc %s through text OT: %s"

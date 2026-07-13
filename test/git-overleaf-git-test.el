@@ -10,6 +10,7 @@
 (require 'git-overleaf-core)
 (require 'git-overleaf-http)
 (require 'git-overleaf-sync)
+(require 'git-overleaf)
 
 (defmacro git-overleaf-git-test--with-temp-dir (var &rest body)
   "Bind VAR to a temporary directory while running BODY."
@@ -239,6 +240,28 @@
                             repo
                             (git-overleaf--base-ref repo))
                            head))))))))
+
+(ert-deftest git-overleaf-git-test-overwrite-clears-stale-pending-config ()
+  (let ((git-overleaf-log-echo nil))
+    (git-overleaf-git-test--with-repo repo
+      (let ((head (git-overleaf-git-test--base-commit repo "base\n")))
+        (git-overleaf--set-pending-pull-state repo head)
+        (should (git-overleaf--pending-state repo))
+        (cl-letf (((symbol-function 'git-overleaf--with-remote-state)
+                   (lambda (_project-id function)
+                     (funcall function "/remote" 'remote-table)))
+                  ((symbol-function 'git-overleaf--read-sync-state)
+                   (lambda (&rest _args)
+                     `(:status diverged :head ,head)))
+                  ((symbol-function 'git-overleaf--upload-head-and-set-base)
+                   (lambda (&rest _args) 'uploaded)))
+          (should (eq (git-overleaf--overwrite-remote-sync
+                       repo 'error t)
+                      'uploaded)))
+        (should-not (git-overleaf--pending-state repo))
+        (should-not
+         (git-overleaf--git-config-get
+          repo "git-overleaf.pendingRemoteCommit"))))))
 
 (ert-deftest git-overleaf-git-test-fresh-push-rejects-remote-changes ()
   (let ((git-overleaf-log-echo nil))
