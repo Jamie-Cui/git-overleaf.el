@@ -194,9 +194,11 @@ to log in to Overleaf.  A stale =geckodriver= process listening on the
 default port =4444= should not prevent re-authentication.
 
 By default, authenticated cookies are stored with Emacs ~auth-source~.
-The package uses the first plain-file entry in ~auth-sources~, falling
-back to =~/.authinfo=.  It manages one entry per Overleaf host using
-=login git-overleaf= and =port git-overleaf-cookie=.
+The package uses the first file entry in ~auth-sources~, including GPG
+encrypted files, and falls back to =~/.authinfo.gpg=.  When updating an
+existing encrypted file it preserves that file's recipients.  It manages
+one entry per Overleaf host using =login git-overleaf= and
+=port git-overleaf-cookie=.
 Re-authentication replaces that managed entry instead of appending stale
 copies.
 
@@ -222,6 +224,16 @@ project discovery asks you to log in again and rerun
 #+end_src
 
 ** Cookie storage
+
+To use the default encrypted auth-source storage:
+
+#+begin_src elisp
+  (setopt auth-sources '("~/.authinfo.gpg")
+          git-overleaf-cookie-storage 'authinfo)
+#+end_src
+
+When the encrypted file does not exist yet, EasyPG prompts for the
+encryption recipients on the first save.
 
 To store cookies in a plain file:
 

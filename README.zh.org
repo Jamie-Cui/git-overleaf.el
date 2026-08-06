@@ -174,9 +174,10 @@ Overleaf。即使有旧的 =geckodriver= 进程占用默认端口 =4444=，也�
 重新认证。
 
 默认情况下，认证后的 cookies 会存入 Emacs ~auth-source~。本包会使用
-~auth-sources~ 中的第一个明文文件条目，并在没有可用条目时回退到
-=~/.authinfo=。它按 Overleaf host 管理一条记录，并使用
-=login git-overleaf= 与 =port git-overleaf-cookie= 进行定位。
+~auth-sources~ 中的第一个文件条目（包括 GPG 加密文件），并在没有可用
+条目时回退到 =~/.authinfo.gpg=。更新已有加密文件时会保留原来的加密
+收件人。它按 Overleaf host 管理一条记录，并使用 =login git-overleaf=
+与 =port git-overleaf-cookie= 进行定位。
 重新认证会替换该受管理记录，而不是追加过期副本。
 
 ** Firefox cookie 导入
@@ -198,6 +199,15 @@ cookies，并在找不到有效 Overleaf session cookie 时给出明确失败信
 #+end_src
 
 ** Cookie 存储
+
+使用默认的加密 auth-source 存储：
+
+#+begin_src elisp
+  (setopt auth-sources '("~/.authinfo.gpg")
+          git-overleaf-cookie-storage 'authinfo)
+#+end_src
+
+如果加密文件尚不存在，EasyPG 会在第一次保存时提示选择加密收件人。
 
 将 cookies 存入普通文件：
 
