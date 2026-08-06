@@ -27,8 +27,8 @@
   "Where Overleaf cookies should be persisted across Emacs sessions.
 
 If the value is the symbol `authinfo', cookies are stored in the first
-plain auth-source file from `auth-sources', falling back to
-`~/.authinfo'.
+file entry from `auth-sources', including encrypted `.gpg' files.  If
+there is no file entry, `~/.authinfo.gpg' is used.
 
 If the value is a string, it is treated as a plain file path where the
 serialized cookie alist is stored.
@@ -570,7 +570,7 @@ ON-ERROR receives an error message string in the foreground."
 
 ;;;; Cookie helpers
 
-(defconst git-overleaf--authinfo-default-source "~/.authinfo"
+(defconst git-overleaf--authinfo-default-source "~/.authinfo.gpg"
   "Fallback authinfo file used by Overleaf cookie helpers.")
 
 (defconst git-overleaf--authinfo-default-user "git-overleaf"
@@ -586,12 +586,7 @@ ON-ERROR receives an error message string in the foreground."
   "Return the expanded authinfo SOURCE file path."
   (expand-file-name
    (or source
-       (cl-some
-        (lambda (entry)
-          (and (stringp entry)
-               (not (string-match-p "\\.gpg\\'" entry))
-               entry))
-        auth-sources)
+       (cl-find-if #'stringp auth-sources)
        git-overleaf--authinfo-default-source)))
 
 (defun git-overleaf--authinfo-resolve-host (&optional host)
@@ -679,17 +674,23 @@ read."
                 resolved-host
                 resolved-user
                 resolved-port
-                secret))
-         (existing
-          (with-temp-buffer
-            (when (file-readable-p file)
-              (insert-file-contents file)
-              (flush-lines regexp))
-            (replace-regexp-in-string "\\`\n+" "" (buffer-string)))))
-    (with-temp-file file
-      (insert line)
-      (unless (string-empty-p existing)
-        (insert "\n" existing)))
+                secret)))
+    (with-temp-buffer
+      (let ((existing
+             (progn
+               (when (file-readable-p file)
+                 (insert-file-contents file)
+                 (goto-char (point-min))
+                 (flush-lines regexp))
+               (replace-regexp-in-string "\\`\n+" "" (buffer-string)))))
+        ;; Keep this buffer's `epa-file-encrypt-to' value.  Reading an
+        ;; existing .gpg file records its recipients buffer-locally, so the
+        ;; following write re-encrypts to the same keys without prompting.
+        (erase-buffer)
+        (insert line)
+        (unless (string-empty-p existing)
+          (insert "\n" existing))
+        (write-region nil nil file nil 'silent)))
     (set-file-modes file #o600)
     (auth-source-forget+ :host resolved-host :user resolved-user :port resolved-port)))
 

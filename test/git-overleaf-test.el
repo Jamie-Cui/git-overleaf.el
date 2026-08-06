@@ -50,6 +50,46 @@
     (should (equal (git-overleaf--cookie-key-candidates)
                    '("overleaf.example" ".overleaf.example")))))
 
+(ert-deftest git-overleaf-test-authinfo-source-supports-gpg ()
+  (let ((auth-sources '("~/.authinfo.gpg")))
+    (should (equal (git-overleaf--authinfo-source-file)
+                   (expand-file-name "~/.authinfo.gpg"))))
+  (let ((auth-sources '(macos-keychain-internet)))
+    (should (equal (git-overleaf--authinfo-source-file)
+                   (expand-file-name "~/.authinfo.gpg")))))
+
+(ert-deftest git-overleaf-test-authinfo-write-preserves-gpg-recipients ()
+  (let (written)
+    (let* ((source "/git-overleaf-test/.authinfo.gpg")
+           (handler
+            (lambda (operation &rest args)
+              (pcase operation
+                ('expand-file-name (car args))
+                ('file-readable-p t)
+                ('insert-file-contents
+                 (setq-local epa-file-encrypt-to '("RECIPIENT"))
+                 (let ((start (point)))
+                   (insert
+                    "machine example.test login git-overleaf port git-overleaf-cookie password b2xk git-overleaf-cookie-record t\n"
+                    "machine other.test login someone port token password keep\n")
+                   (list (car args) (- (point) start))))
+                ('write-region
+                 (setq written
+                       (list (buffer-string) epa-file-encrypt-to)))
+                ('set-file-modes nil)
+                (_ (error "Unexpected file operation: %S" operation)))))
+           (file-name-handler-alist
+            (list (cons (concat "\\`" (regexp-quote source) "\\'") handler)))
+           (auth-sources (list source)))
+      (git-overleaf--authinfo-write-secret
+       nil "example.test" "git-overleaf" "git-overleaf-cookie" "new-cookie")
+      (should (equal (cadr written) '("RECIPIENT")))
+      (should (string-prefix-p
+               "machine example.test login git-overleaf port git-overleaf-cookie password "
+               (car written)))
+      (should-not (string-match-p "password b2xk" (car written)))
+      (should (string-match-p "machine other.test.*password keep" (car written))))))
+
 (ert-deftest git-overleaf-test-sanitize-name ()
   (should (equal (git-overleaf--sanitize-name "  My Project v2.tex!! ")
                  "my-project-v2-tex"))
