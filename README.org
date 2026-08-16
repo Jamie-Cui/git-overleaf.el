@@ -4,9 +4,9 @@
 #+title: git-overleaf
 #+subtitle: Git-based Overleaf project synchronization for Emacs
 
-[[https://github.com/Jamie-Cui/git-overleaf/actions/workflows/test.yml][https://github.com/Jamie-Cui/git-overleaf/actions/workflows/test.yml/badge.svg]]
-[[https://github.com/Jamie-Cui/git-overleaf/actions/workflows/coverage.yml][https://github.com/Jamie-Cui/git-overleaf/actions/workflows/coverage.yml/badge.svg]]
-[[https://github.com/Jamie-Cui/git-overleaf/actions/workflows/melpazoid.yml][https://github.com/Jamie-Cui/git-overleaf/actions/workflows/melpazoid.yml/badge.svg]]
+[[https://github.com/Jamie-Cui/git-overleaf.el/actions/workflows/test.yml][https://github.com/Jamie-Cui/git-overleaf.el/actions/workflows/test.yml/badge.svg]]
+[[https://github.com/Jamie-Cui/git-overleaf.el/actions/workflows/coverage.yml][https://github.com/Jamie-Cui/git-overleaf.el/actions/workflows/coverage.yml/badge.svg]]
+[[https://github.com/Jamie-Cui/git-overleaf.el/actions/workflows/melpazoid.yml][https://github.com/Jamie-Cui/git-overleaf.el/actions/workflows/melpazoid.yml/badge.svg]]
 [[https://melpa.org/#/git-overleaf][https://melpa.org/packages/git-overleaf-badge.svg]]
 
 Chinese README: [[file:README.zh.org][README.zh.org]]
@@ -53,6 +53,7 @@ packages:
 - =websocket= 1.15 or later
 - =webdriver= 0.1 or later
 - =magit-section= 4.5 or later
+- =transient= 0.7.2 or later
 
 Project synchronization also requires these external executables:
 
@@ -407,6 +408,23 @@ The clone, init, push, and pull commands store project metadata in the
 repository's local Git config.  After a repository is bound, later pushes
 and pulls can run from anywhere inside that repository.
 
+Clone and init also register a branchless logical Git remote named
+=overleaf= by default.  It has no URL, push URL, or refspec; its local
+config marker associates it with the Overleaf project while
+=skipFetchAll= and =skipDefaultUpdate= keep ordinary Git bulk operations
+from contacting it.  The latest successfully observed snapshot is stored
+in ~refs/git-overleaf/remote~, independently of the synchronized base in
+~refs/git-overleaf/base~.  Normal remotes such as =origin= are unchanged.
+
+For a repository created by an older git-overleaf version, either run
+~git-overleaf-register-remote~ once or use an explicit uppercase =O=
+operation in Magit, which offers to register the remote before continuing.
+If =overleaf= is already a real Git remote, clone/init leaves it untouched;
+interactive Magit registration prompts for an alternate name.  Normal
+~git remote rename~ and ~git remote remove~ work.  Opening or refreshing a
+Magit status buffer never registers a remote, so a removed logical remote is
+not recreated without approval from an explicit =O= operation.
+
 Successful push operations maintain a root-level
 ~.git-overleaf-sync.json~ file on the Overleaf project when
 ~git-overleaf-sync-metadata-enabled~ is non-nil.  The file records the
@@ -495,11 +513,19 @@ integration:
     (git-overleaf-magit-setup))
 #+end_src
 
-For Overleaf-managed repositories, each =magit-status= refresh may also
-start a background refresh of the remote Overleaf snapshot when
-~git-overleaf-enable-async~ is non-nil.  Automatic refresh is
-internally throttled so ordinary Magit refreshes do not repeatedly
-download snapshots.
+For Overleaf-managed repositories, the section is always present.  It
+shows whether the remote is unchecked, being refreshed, in sync, changed
+locally, changed remotely, or changed on both sides.  Staged, unstaged,
+untracked, and unmerged worktree changes are noted in the heading while
+their diffs remain in Magit's standard sections.  Local and remote
+snapshot diffs are collapsed and generated only when expanded.
+
+Each =magit-status= refresh may also start a background refresh of the
+remote Overleaf snapshot.  This Magit-specific background refresh is
+controlled by ~git-overleaf-magit-auto-refresh-remote~ independently of
+~git-overleaf-enable-async~.  Automatic refresh is internally throttled
+and shares the repository operation lock with push and pull, so ordinary
+Magit refreshes neither block nor race an active sync operation.
 
 To keep remote refresh manual:
 
@@ -512,6 +538,34 @@ Remote state can still be refreshed with:
 #+begin_example
 M-x git-overleaf-magit-refresh-remote
 #+end_example
+
+The standard Magit fetch, pull, and push transients each add an uppercase
+=O= action labelled with the logical remote name.  When the remote is not
+registered, the label instead says that the action will register it and
+then fetch, pull, or push.  Selecting it asks for confirmation, registers
+the default name (or prompts for another name after a collision), and
+continues the requested operation.  These actions are branchless: fetch
+updates only ~refs/git-overleaf/remote~, pull runs ~git-overleaf-pull~, and
+push runs ~git-overleaf-push~.  Active Git-only transient arguments are
+rejected.  Selecting the logical remote from Magit's ordinary "fetch
+elsewhere" action also routes a no-argument fetch through git-overleaf;
+branches and refspecs are unsupported.  All other Git remotes retain
+Magit's normal behavior.  Explicit =O= fetch bypasses the automatic
+refresh throttle.
+
+On the Overleaf section, =G= refreshes the remote and =RET= opens the
+project in a browser.  =C-c C-c= is a command prefix with these keys:
+
+| Key | Command |
+|-----+---------|
+| =b= | Browse the Overleaf project. |
+| =g= | Refresh the remote snapshot. |
+| =l= | Pull from Overleaf. |
+| =p= | Push to Overleaf. |
+| =r= | Register the logical Overleaf remote. |
+| =O= | Overwrite the remote after confirmation. |
+| =L= | Show the git-overleaf log. |
+| =k= | Stop background Overleaf operations. |
 
 * Commit Hook
 
@@ -536,6 +590,8 @@ hook-driven pushes.
 | ~git-overleaf-authenticate~ | Authenticate and store Overleaf cookies. |
 | ~git-overleaf-clone~ | Clone an Overleaf project into a new local Git repository. |
 | ~git-overleaf-init~ | Bind the current Git repository to an Overleaf project. |
+| ~git-overleaf-register-remote~ | Register or migrate the branchless logical Overleaf remote. |
+| ~git-overleaf-fetch~ | Refresh only the latest Overleaf snapshot ref. |
 | ~git-overleaf-push~ | Upload local ~HEAD~ to Overleaf when the remote has not diverged. |
 | ~git-overleaf-overwrite-remote~ | Replace the remote Overleaf project with local ~HEAD~. |
 | ~git-overleaf-pull~ | Pull and merge the latest Overleaf snapshot. |
@@ -557,9 +613,11 @@ Default bindings in ~git-overleaf-command-map~:
 | =a= | ~git-overleaf-authenticate~ |
 | =b= | ~git-overleaf-browse-remote~ |
 | =c= | ~git-overleaf-clone~ |
+| =f= | ~git-overleaf-fetch~ |
 | =k= | ~git-overleaf-force-stop~ |
 | =l= | ~git-overleaf-pull~ |
 | =p= | ~git-overleaf-push~ |
+| =r= | ~git-overleaf-register-remote~ |
 | =s= | ~git-overleaf-push~ |
 
 The =s= binding is retained as a compatibility shortcut.
@@ -575,6 +633,8 @@ Important user options include:
 | ~git-overleaf-cookie-storage~ | Cookie storage backend: ~authinfo~, a file path, or nil. |
 | ~git-overleaf-firefox-profile~ | Explicit Firefox profile path for cookie import. |
 | ~git-overleaf-enable-async~ | Run long interactive operations in background threads. |
+| ~git-overleaf-remote-name~ | Default branchless logical remote name. |
+| ~git-overleaf-remote-ref~ | Ref storing the latest observed Overleaf snapshot. |
 | ~git-overleaf-sync-auto-commit-message~ | Commit message for automatic local checkpoint commits before push. |
 | ~git-overleaf-sync-metadata-enabled~ | Enable the remote sync metadata file. |
 | ~git-overleaf-sync-metadata-file~ | Name of the reserved remote metadata file. |

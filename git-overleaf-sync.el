@@ -671,7 +671,7 @@ REMOTE-TABLE is the current Overleaf entity table."
         (ignore-errors (delete-directory local-root t))))))
 
 (defun git-overleaf--record-remote-snapshot (repo remote-root)
-  "Create a Git commit in REPO representing REMOTE-ROOT."
+  "Create and record a Git commit in REPO representing REMOTE-ROOT."
   (let* ((snapshot-commit
           (git-overleaf--commit-directory
            repo
@@ -681,9 +681,12 @@ REMOTE-TABLE is the current Overleaf entity table."
             (git-overleaf--base-ref repo))
            (format "overleaf: remote snapshot %s"
                    (format-time-string "%Y-%m-%d %H:%M:%S"))))
-         (snapshot-tree (git-overleaf--tree-id repo snapshot-commit)))
-    (or (git-overleaf--remote-sync-metadata-commit repo snapshot-tree)
-        snapshot-commit)))
+         (snapshot-tree (git-overleaf--tree-id repo snapshot-commit))
+         (remote-commit
+          (or (git-overleaf--remote-sync-metadata-commit repo snapshot-tree)
+              snapshot-commit)))
+    (git-overleaf--set-remote-ref repo remote-commit)
+    remote-commit))
 
 (defun git-overleaf--initialize-base-ref (repo project remote-root)
   "Persist PROJECT in REPO and initialize the hidden Overleaf base ref.
@@ -701,6 +704,7 @@ not modify the working tree or perform a pull/push."
     (git-overleaf--write-repo-metadata repo project)
     (git-overleaf--clear-pending-state repo)
     (git-overleaf--set-base-ref repo remote-commit)
+    (git-overleaf--set-remote-ref repo remote-commit)
     remote-commit))
 
 (defun git-overleaf--classify-sync-state (base-tree head-tree remote-tree)
@@ -798,6 +802,7 @@ metadata."
   (when (and project-id remote-table)
     (git-overleaf--upload-sync-metadata repo head project-id remote-table))
   (git-overleaf--set-base-ref repo head)
+  (git-overleaf--set-remote-ref repo head)
   (git-overleaf--message "Local and remote content already match; base ref updated"))
 
 (defun git-overleaf--upload-head-and-set-base
@@ -807,6 +812,7 @@ metadata."
    repo head project-id remote-root remote-table)
   (git-overleaf--upload-sync-metadata repo head project-id remote-table)
   (git-overleaf--set-base-ref repo head)
+  (git-overleaf--set-remote-ref repo head)
   (apply #'git-overleaf--message format-string args))
 
 (defun git-overleaf--finalize-pending-pull
@@ -841,6 +847,8 @@ REMOTE-ROOT and REMOTE-TABLE describe the current remote state."
     (pcase status
       ('in-sync
        (git-overleaf--upload-sync-metadata repo head project-id remote-table)
+       (git-overleaf--set-base-ref repo head)
+       (git-overleaf--set-remote-ref repo head)
        (git-overleaf--message "Project `%s' is already in sync"
 				                  (git-overleaf--project-name repo)))
       ('head-matches-remote
