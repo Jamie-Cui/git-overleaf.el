@@ -4,9 +4,9 @@
 #+title: git-overleaf
 #+subtitle: Git-based Overleaf project synchronization for Emacs
 
-[[https://github.com/Jamie-Cui/git-overleaf/actions/workflows/test.yml][https://github.com/Jamie-Cui/git-overleaf/actions/workflows/test.yml/badge.svg]]
-[[https://github.com/Jamie-Cui/git-overleaf/actions/workflows/coverage.yml][https://github.com/Jamie-Cui/git-overleaf/actions/workflows/coverage.yml/badge.svg]]
-[[https://github.com/Jamie-Cui/git-overleaf/actions/workflows/melpazoid.yml][https://github.com/Jamie-Cui/git-overleaf/actions/workflows/melpazoid.yml/badge.svg]]
+[[https://github.com/Jamie-Cui/git-overleaf.el/actions/workflows/test.yml][https://github.com/Jamie-Cui/git-overleaf.el/actions/workflows/test.yml/badge.svg]]
+[[https://github.com/Jamie-Cui/git-overleaf.el/actions/workflows/coverage.yml][https://github.com/Jamie-Cui/git-overleaf.el/actions/workflows/coverage.yml/badge.svg]]
+[[https://github.com/Jamie-Cui/git-overleaf.el/actions/workflows/melpazoid.yml][https://github.com/Jamie-Cui/git-overleaf.el/actions/workflows/melpazoid.yml/badge.svg]]
 [[https://melpa.org/#/git-overleaf][https://melpa.org/packages/git-overleaf-badge.svg]]
 
 Chinese README: [[file:README.zh.org][README.zh.org]]

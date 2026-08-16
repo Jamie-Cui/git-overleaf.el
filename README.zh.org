@@ -1,8 +1,8 @@
 #+title: git-overleaf（中文说明）
 #+subtitle: Emacs 中基于 Git 的 Overleaf 项目同步工具
 
-[[https://github.com/Jamie-Cui/git-overleaf/actions/workflows/test.yml][https://github.com/Jamie-Cui/git-overleaf/actions/workflows/test.yml/badge.svg]]
-[[https://github.com/Jamie-Cui/git-overleaf/actions/workflows/coverage.yml][https://github.com/Jamie-Cui/git-overleaf/actions/workflows/coverage.yml/badge.svg]]
+[[https://github.com/Jamie-Cui/git-overleaf.el/actions/workflows/test.yml][https://github.com/Jamie-Cui/git-overleaf.el/actions/workflows/test.yml/badge.svg]]
+[[https://github.com/Jamie-Cui/git-overleaf.el/actions/workflows/coverage.yml][https://github.com/Jamie-Cui/git-overleaf.el/actions/workflows/coverage.yml/badge.svg]]
 [[https://melpa.org/#/git-overleaf][https://melpa.org/packages/git-overleaf-badge.svg]]
 
 English README: [[file:README.org][README.org]]
