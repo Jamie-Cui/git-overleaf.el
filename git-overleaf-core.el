@@ -107,6 +107,19 @@ The cookies are usually obtained and refreshed via
   :type 'string
   :group 'git-overleaf)
 
+(defcustom git-overleaf-remote-ref "refs/git-overleaf/remote"
+  "Git ref that stores the latest fetched Overleaf snapshot."
+  :type 'string
+  :group 'git-overleaf)
+
+(defcustom git-overleaf-remote-name "overleaf"
+  "Default name of the branchless logical Overleaf remote.
+
+The remote has no URL and is intended for git-overleaf clients and
+Magit integration, not for direct Git transport commands."
+  :type 'string
+  :group 'git-overleaf)
+
 (defcustom git-overleaf-sync-metadata-enabled t
   "Whether to maintain a remote Overleaf sync metadata file.
 
@@ -273,6 +286,20 @@ this variable directly only when you want custom persistence logic.")
 
 (defvar git-overleaf--async-timer nil
   "Timer that drains completed background operations.")
+
+(defvar git-overleaf--after-operation-functions nil
+  "Functions called after successful repository operations.
+
+Each function receives the repository root and an operation symbol such
+as `fetch', `pull', `push', or `overwrite'.")
+
+(defun git-overleaf--repo-async-key (repo)
+  "Return the async operation lock key for REPO."
+  (format "repo:%s" (directory-file-name (expand-file-name repo))))
+
+(defun git-overleaf--async-key-active-p (key)
+  "Return non-nil when an asynchronous operation holds KEY."
+  (and key (gethash key git-overleaf--async-locks)))
 
 (defmacro git-overleaf--with-async-mutex (&rest body)
   "Run BODY while holding the async completion mutex."
@@ -503,7 +530,7 @@ ON-ERROR receives an error message string in the foreground."
            (if on-error
                (funcall on-error message)
              (signal (car err) (cdr err))))))
-    (when (and key (gethash key git-overleaf--async-locks))
+    (when (git-overleaf--async-key-active-p key)
       (user-error "Overleaf operation already running: %s"
                   (gethash key git-overleaf--async-locks)))
     (when key
@@ -1304,6 +1331,102 @@ Signal an error on detached HEAD."
    nil
    t))
 
+(defun git-overleaf--git-remotes (repo)
+  "Return the names of Git remotes configured in REPO."
+  (when-let* ((output (git-overleaf--git-output-noerror repo "remote")))
+    (split-string output "\n" t)))
+
+(defun git-overleaf--marked-remotes (repo &optional project-id)
+  "Return logical Overleaf remotes configured in REPO.
+When PROJECT-ID is non-nil, only return remotes marked for that project."
+  (when-let* ((output
+               (git-overleaf--git-output-noerror
+                repo
+                "config"
+                "--local"
+                "--get-regexp"
+                "^remote\\..*\\.gitoverleafprojectid$")))
+    (let (remotes)
+      (dolist (line (split-string output "\n" t))
+        (when (string-match
+               "\\`remote\\.\\(.+\\)\\.gitoverleafprojectid[[:space:]]+\\(.+\\)\\'"
+               line)
+          (let ((remote (match-string 1 line))
+                (marker-project-id (match-string 2 line)))
+            (when (or (null project-id)
+                      (equal marker-project-id project-id))
+              (push remote remotes)))))
+      (nreverse remotes))))
+
+(defun git-overleaf--remote-name (repo)
+  "Return REPO's registered logical Overleaf remote, or nil."
+  (let ((remotes
+         (git-overleaf--marked-remotes
+          repo
+          (git-overleaf--project-id repo))))
+    (pcase remotes
+      ('nil nil)
+      (`(,remote) remote)
+      (_
+       (user-error
+        "Repository %s has multiple logical remotes for this Overleaf project: %s"
+        repo
+        (string-join remotes ", "))))))
+
+(defun git-overleaf--validate-remote-name (repo name)
+  "Return NAME when it is a valid remote name for REPO, or signal."
+  (unless (and (stringp name) (not (string-empty-p name)))
+    (user-error "Overleaf remote name cannot be empty"))
+  (unless (git-overleaf--git-output-noerror
+           repo
+           "check-ref-format"
+           (format "refs/remotes/%s/project" name))
+    (user-error "Invalid Overleaf remote name: %s" name))
+  name)
+
+(defun git-overleaf--configure-remote (repo name project-id)
+  "Configure NAME in REPO as the logical remote for PROJECT-ID."
+  (git-overleaf--git-config-set
+   repo (format "remote.%s.gitOverleafProjectId" name) project-id)
+  (git-overleaf--git-config-set
+   repo (format "remote.%s.skipFetchAll" name) "true")
+  (git-overleaf--git-config-set
+   repo (format "remote.%s.skipDefaultUpdate" name) "true")
+  name)
+
+(defun git-overleaf--register-remote (repo name &optional project-id)
+  "Register logical Overleaf remote NAME in REPO.
+Use PROJECT-ID when non-nil, otherwise read it from repository metadata.
+Return the registered remote name.  Existing marked remotes are reused."
+  (setq name (git-overleaf--validate-remote-name repo name))
+  (let* ((project-id (or project-id (git-overleaf--project-id repo)))
+         (marked (git-overleaf--marked-remotes repo)))
+    (pcase marked
+      (`(,remote)
+       (git-overleaf--configure-remote repo remote project-id))
+      ('nil
+       (when (member name (git-overleaf--git-remotes repo))
+         (user-error
+          "Git remote `%s' already exists and is not an Overleaf remote"
+          name))
+       (git-overleaf--configure-remote repo name project-id))
+      (_
+       (user-error
+        "Repository %s has multiple logical Overleaf remotes: %s"
+        repo
+        (string-join marked ", "))))))
+
+(defun git-overleaf--maybe-register-default-remote (repo project-id)
+  "Register REPO's default logical remote for PROJECT-ID when safe.
+Return its name, or nil when the default name belongs to a real remote."
+  (condition-case err
+      (git-overleaf--register-remote repo git-overleaf-remote-name project-id)
+    (user-error
+     (git-overleaf--warn
+      "%s; run `git-overleaf-register-remote' with another name"
+      (error-message-string err))
+     nil)))
+
 (defun git-overleaf--set-base-ref (repo revision)
   "Move the Overleaf base ref in REPO to REVISION."
   (git-overleaf--git-output
@@ -1313,10 +1436,23 @@ Signal an error on detached HEAD."
        git-overleaf-base-ref)
    revision))
 
+(defun git-overleaf--set-remote-ref (repo revision)
+  "Move the latest Overleaf snapshot ref in REPO to REVISION."
+  (git-overleaf--git-output
+   repo
+   "update-ref"
+   (git-overleaf--remote-ref repo)
+   revision))
+
 (defun git-overleaf--base-ref (repo)
   "Return the configured base ref for REPO."
   (or (git-overleaf--git-config-get repo "git-overleaf.baseRef")
       git-overleaf-base-ref))
+
+(defun git-overleaf--remote-ref (repo)
+  "Return the configured latest Overleaf snapshot ref for REPO."
+  (or (git-overleaf--git-config-get repo "git-overleaf.remoteRef")
+      git-overleaf-remote-ref))
 
 (defun git-overleaf--project-id (repo)
   "Return the configured Overleaf project id for REPO."
@@ -1341,7 +1477,16 @@ Signal an error on detached HEAD."
   (git-overleaf--git-config-set
    repo "git-overleaf.url" (git-overleaf--url))
   (git-overleaf--git-config-set
-   repo "git-overleaf.baseRef" git-overleaf-base-ref))
+   repo "git-overleaf.baseRef" git-overleaf-base-ref)
+  (git-overleaf--git-config-set
+   repo "git-overleaf.remoteRef" git-overleaf-remote-ref)
+  (git-overleaf--maybe-register-default-remote
+   repo (plist-get project :id)))
+
+(defun git-overleaf--notify-operation-succeeded (repo operation)
+  "Notify integrations that OPERATION succeeded for REPO."
+  (run-hook-with-args
+   'git-overleaf--after-operation-functions repo operation))
 
 ;;;; Log context
 

@@ -42,6 +42,7 @@ Git 快照工作流。
 - =websocket= 1.15 或更新版本
 - =webdriver= 0.1 或更新版本
 - =magit-section= 4.5 或更新版本
+- =transient= 0.7.2 或更新版本
 
 项目同步还要求系统中可用以下外部可执行文件：
 
@@ -365,6 +366,17 @@ pull。
 clone、init、push 和 pull 命令会将项目元数据存入仓库的本地 Git 配置。仓
 库绑定后，可以从该仓库内任意目录继续运行 push 和 pull。
 
+clone 和 init 还会默认注册名为 =overleaf= 的无分支逻辑 Git remote。它没有
+URL、push URL 或 refspec；本地 config marker 将它与 Overleaf 项目关联，
+=skipFetchAll= 和 =skipDefaultUpdate= 则避免普通 Git 批量操作访问它。最近一次
+成功观察到的远端快照保存在 ~refs/git-overleaf/remote~，与记录同步基线的
+~refs/git-overleaf/base~ 相互独立。=origin= 等普通 remote 不受影响。
+
+旧版本创建的仓库需要运行一次 ~git-overleaf-register-remote~。如果
+=overleaf= 已经是一个真实 Git remote，clone/init 会保留它并提示用另一个名字
+注册。普通的 ~git remote rename~ 和 ~git remote remove~ 都可使用；删除后不
+会自动重建逻辑 remote。
+
 当 ~git-overleaf-sync-metadata-enabled~ 为非 nil 时，成功的 push 操作
 会在 Overleaf 项目根目录维护 ~.git-overleaf-sync.json~。该文件记录本
 包上次上传的本地 Git commit 和 tree。下载快照后，它会在 Git 比较前被移
@@ -440,9 +452,15 @@ Emacs 的 ~process-environment~，不一定等同于运行 =emacsclient= 的 she
     (git-overleaf-magit-setup))
 #+end_src
 
-对于 Overleaf 管理的仓库，当 ~git-overleaf-enable-async~ 为非 nil 时，
-每次 =magit-status= 刷新也可能在后台刷新远端 Overleaf 快照。自动刷新会被
-内部节流，避免普通 Magit 刷新反复下载快照。
+对于 Overleaf 管理的仓库，该 section 会始终显示，并区分远端未检查、正在
+刷新、已同步、仅本地变化、仅远端变化和双方都有变化。标题也会提示 staged、
+unstaged、untracked 或 unmerged 工作区变化；具体工作区 diff 仍由 Magit 的
+标准 section 展示。本地和远端快照 diff 默认折叠，只在展开时生成。
+
+每次 =magit-status= 刷新也可能在后台刷新远端 Overleaf 快照。这个 Magit 专用
+后台刷新由 ~git-overleaf-magit-auto-refresh-remote~ 独立控制，不再依赖
+~git-overleaf-enable-async~。自动刷新会被内部节流，并与 push/pull 共用仓库
+操作锁，因此普通 Magit 刷新既不会阻塞，也不会与正在执行的同步操作竞争。
 
 若要保持手动远端刷新：
 
@@ -455,6 +473,28 @@ Emacs 的 ~process-environment~，不一定等同于运行 =emacsclient= 的 she
 #+begin_example
 M-x git-overleaf-magit-refresh-remote
 #+end_example
+
+Magit 的 fetch、pull 和 push transient 都会增加一个大写 =O= 动作，并显示
+逻辑 remote 名。它们不接受分支：fetch 只更新
+~refs/git-overleaf/remote~，pull 调用 ~git-overleaf-pull~，push 调用
+~git-overleaf-push~。已启用的 Git 专用 transient 参数会被拒绝。从 Magit
+普通的 “fetch elsewhere” 选择该逻辑 remote 且不提供参数时，也会转交给
+git-overleaf；分支和 refspec 不受支持。其他 Git remote 仍保持 Magit 原始
+行为。显式 =O= fetch 不受自动刷新节流限制。
+
+在 Overleaf section 上，=G= 刷新远端，=RET= 在浏览器中打开项目。
+=C-c C-c= 是命令前缀，包含：
+
+| 按键 | 命令 |
+|------+------|
+| =b= | 浏览 Overleaf 项目。 |
+| =g= | 刷新远端快照。 |
+| =l= | 从 Overleaf 拉取。 |
+| =p= | 推送到 Overleaf。 |
+| =r= | 注册逻辑 Overleaf remote。 |
+| =O= | 确认后覆盖远端。 |
+| =L= | 显示 git-overleaf 日志。 |
+| =k= | 停止后台 Overleaf 操作。 |
 
 * Commit Hook
 
@@ -477,6 +517,8 @@ hook 会在 push 运行期间阻塞 Emacs。启用 ~git-overleaf-enable-async~
 | ~git-overleaf-authenticate~ | 认证并保存 Overleaf cookies。 |
 | ~git-overleaf-clone~ | 将 Overleaf 项目克隆为新的本地 Git 仓库。 |
 | ~git-overleaf-init~ | 将当前 Git 仓库绑定到 Overleaf 项目。 |
+| ~git-overleaf-register-remote~ | 注册或迁移无分支逻辑 Overleaf remote。 |
+| ~git-overleaf-fetch~ | 只刷新最新 Overleaf 快照 ref。 |
 | ~git-overleaf-push~ | 在远端未分叉时上传本地 ~HEAD~ 到 Overleaf。 |
 | ~git-overleaf-overwrite-remote~ | 用本地 ~HEAD~ 替换远端 Overleaf 项目。 |
 | ~git-overleaf-pull~ | 拉取并合并最新 Overleaf 快照。 |
@@ -498,9 +540,11 @@ hook 会在 push 运行期间阻塞 Emacs。启用 ~git-overleaf-enable-async~
 | =a= | ~git-overleaf-authenticate~ |
 | =b= | ~git-overleaf-browse-remote~ |
 | =c= | ~git-overleaf-clone~ |
+| =f= | ~git-overleaf-fetch~ |
 | =k= | ~git-overleaf-force-stop~ |
 | =l= | ~git-overleaf-pull~ |
 | =p= | ~git-overleaf-push~ |
+| =r= | ~git-overleaf-register-remote~ |
 | =s= | ~git-overleaf-push~ |
 
 =s= 绑定作为兼容快捷键保留。
@@ -516,6 +560,8 @@ hook 会在 push 运行期间阻塞 Emacs。启用 ~git-overleaf-enable-async~
 | ~git-overleaf-cookie-storage~ | Cookie 存储后端：~authinfo~、文件路径或 nil。 |
 | ~git-overleaf-firefox-profile~ | Firefox cookie 导入使用的显式 profile 路径。 |
 | ~git-overleaf-enable-async~ | 在后台线程中运行耗时交互操作。 |
+| ~git-overleaf-remote-name~ | 默认的无分支逻辑 remote 名。 |
+| ~git-overleaf-remote-ref~ | 保存最近一次观察到的 Overleaf 快照的 ref。 |
 | ~git-overleaf-sync-auto-commit-message~ | push 前自动本地 checkpoint commit 的提交信息。 |
 | ~git-overleaf-sync-metadata-enabled~ | 启用远端同步元数据文件。 |
 | ~git-overleaf-sync-metadata-file~ | 保留的远端元数据文件名。 |

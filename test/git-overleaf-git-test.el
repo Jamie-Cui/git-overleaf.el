@@ -87,7 +87,10 @@
   (git-overleaf--git-config-set
    repo "git-overleaf.url" "https://www.overleaf.com")
   (git-overleaf--git-config-set
-   repo "git-overleaf.baseRef" git-overleaf-base-ref))
+   repo "git-overleaf.baseRef" git-overleaf-base-ref)
+  (git-overleaf--git-config-set
+   repo "git-overleaf.remoteRef" git-overleaf-remote-ref)
+  (git-overleaf--configure-remote repo git-overleaf-remote-name "project-id"))
 
 (defun git-overleaf-git-test--base-commit (repo text)
   "Create a base commit in REPO containing TEXT and set the base ref."
@@ -95,6 +98,7 @@
   (let ((commit (git-overleaf-git-test--commit-all repo "base")))
     (git-overleaf-git-test--mark-managed repo)
     (git-overleaf--set-base-ref repo commit)
+    (git-overleaf--set-remote-ref repo commit)
     commit))
 
 (defmacro git-overleaf-git-test--without-remote-side-effects (&rest body)
@@ -192,6 +196,19 @@
                           repo
                           (git-overleaf--base-ref repo))
                          commit))
+          (should (equal (git-overleaf--rev-parse
+                          repo
+                          (git-overleaf--remote-ref repo))
+                         commit))
+          (should (equal (git-overleaf--remote-name repo) "overleaf"))
+          (should (equal
+                   (git-overleaf--git-config-get
+                    repo "remote.overleaf.skipFetchAll")
+                   "true"))
+          (should (equal
+                   (git-overleaf--git-config-get
+                    repo "remote.overleaf.skipDefaultUpdate")
+                   "true"))
           (unwind-protect
               (progn
                 (setq materialized
@@ -219,7 +236,47 @@
           (should (equal (git-overleaf--record-remote-snapshot
                           repo
                           snapshot)
-                         head)))))))
+                         head))
+          (should (equal
+                   (git-overleaf--rev-parse repo git-overleaf-remote-ref)
+                   head)))))))
+
+(ert-deftest git-overleaf-git-test-logical-remote-rename-and-remove ()
+  (git-overleaf-git-test--with-repo repo
+    (git-overleaf--write-repo-metadata
+     repo '(:id "project-id" :name "Project"))
+    (should (equal (git-overleaf--remote-name repo) "overleaf"))
+    (git-overleaf-git-test--git repo "remote" "rename" "overleaf" "paper")
+    (should (equal (git-overleaf--remote-name repo) "paper"))
+    (git-overleaf-git-test--git repo "remote" "remove" "paper")
+    (should-not (git-overleaf--remote-name repo))))
+
+(ert-deftest git-overleaf-git-test-logical-remote-name-collision ()
+  (git-overleaf-git-test--with-repo repo
+    (git-overleaf-git-test--git
+     repo "remote" "add" "overleaf" "https://example.invalid/repo.git")
+    (let (warnings)
+      (cl-letf (((symbol-function 'git-overleaf--warn)
+                 (lambda (&rest args) (push args warnings))))
+        (git-overleaf--write-repo-metadata
+         repo '(:id "project-id" :name "Project")))
+      (should warnings))
+    (should-not (git-overleaf--remote-name repo))
+    (should (equal
+             (git-overleaf--git-config-get repo "remote.overleaf.url")
+             "https://example.invalid/repo.git"))
+    (git-overleaf-git-test--write-file repo "main.tex" "base\n")
+    (let ((head (git-overleaf-git-test--commit-all repo "base")))
+      (git-overleaf--set-base-ref repo head)
+      (should (equal
+               (git-overleaf-register-remote repo "overleaf-project")
+               "overleaf-project"))
+      (should (equal
+               (git-overleaf--remote-name repo)
+               "overleaf-project"))
+      (should (equal
+               (git-overleaf--rev-parse repo (git-overleaf--remote-ref repo))
+               head)))))
 
 (ert-deftest git-overleaf-git-test-fresh-push-uploads-local-head ()
   (let ((git-overleaf-log-echo nil))
@@ -239,6 +296,34 @@
             (should (equal (git-overleaf--rev-parse
                             repo
                             (git-overleaf--base-ref repo))
+                           head))
+            (should (equal (git-overleaf--rev-parse
+                            repo
+                            (git-overleaf--remote-ref repo))
+                           head))))))))
+
+(ert-deftest git-overleaf-git-test-fresh-push-normalizes-matching-refs ()
+  (let ((git-overleaf-log-echo nil))
+    (git-overleaf-git-test--with-repo repo
+      (git-overleaf-git-test--base-commit repo "same\n")
+      (git-overleaf-git-test--git repo "commit" "--allow-empty" "-m" "empty")
+      (let ((head (git-overleaf--rev-parse repo "HEAD")))
+        (git-overleaf-git-test--with-temp-dir remote-root
+          (git-overleaf-git-test--write-file remote-root "main.tex" "same\n")
+          (git-overleaf-git-test--without-remote-side-effects
+            (git-overleaf--fresh-push
+             repo
+             remote-root
+             (git-overleaf-git-test--remote-table))
+            (should-not sync-calls)
+            (should (= (length metadata-calls) 1))
+            (should (equal (git-overleaf--rev-parse
+                            repo
+                            (git-overleaf--base-ref repo))
+                           head))
+            (should (equal (git-overleaf--rev-parse
+                            repo
+                            (git-overleaf--remote-ref repo))
                            head))))))))
 
 (ert-deftest git-overleaf-git-test-overwrite-clears-stale-pending-config ()
@@ -309,6 +394,10 @@
         (should (equal (git-overleaf--rev-parse
                         repo
                         (git-overleaf--base-ref repo))
+                       (git-overleaf--rev-parse repo "HEAD")))
+        (should (equal (git-overleaf--rev-parse
+                        repo
+                        (git-overleaf--remote-ref repo))
                        (git-overleaf--rev-parse repo "HEAD")))
         (should-not (git-overleaf--pending-state repo))
         (should-not (string-empty-p

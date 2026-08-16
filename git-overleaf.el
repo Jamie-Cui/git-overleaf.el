@@ -5,7 +5,7 @@
 ;; Assisted-by: Codex:GPT-5.5
 ;; Created: April 14, 2026
 ;; URL: https://github.com/Jamie-Cui/git-overleaf
-;; Package-Requires: ((emacs "29.4") (websocket "1.15") (webdriver "0.1") (magit-section "4.5"))
+;; Package-Requires: ((emacs "29.4") (websocket "1.15") (webdriver "0.1") (magit-section "4.5") (transient "0.7.2"))
 ;; Version: 2.0.0
 ;; Keywords: hypermedia, tex, tools
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -32,10 +32,6 @@
 (require 'git-overleaf-sync)
 
 ;;;; Command helpers
-
-(defun git-overleaf--repo-async-key (repo)
-  "Return the async lock key for REPO."
-  (format "repo:%s" (directory-file-name (expand-file-name repo))))
 
 (defun git-overleaf--ensure-authenticated-async (op-desc continuation)
   "Ensure cookies are usable before OP-DESC, then call CONTINUATION.
@@ -116,10 +112,11 @@ background before calling CONTINUATION."
         (apply
          #'git-overleaf--git-output
          repo
-         (append
+        (append
           (git-overleaf--git-identity-args repo)
           '("commit" "-m" "chore: import project from Overleaf")))
         (git-overleaf--set-base-ref repo "HEAD")
+        (git-overleaf--set-remote-ref repo "HEAD")
         (git-overleaf--message
          "Cloned `%s' into %s"
          (plist-get project :name)
@@ -290,6 +287,12 @@ When NOERROR is non-nil, demote setup and background errors to warnings."
 				                                     (lambda ()
 					                                   (git-overleaf--push-sync repo unstaged-action t))
 				                                     :key (git-overleaf--repo-async-key repo)
+				                                     :on-success
+				                                     (lambda (_value)
+					                                   (git-overleaf--notify-operation-succeeded
+					                                    repo 'push)
+					                                   (git-overleaf--message
+					                                    "Finished %s" name))
 				                                     :on-error
 				                                     (lambda (message)
 					                                   (if noerror
@@ -335,12 +338,19 @@ When NOERROR is non-nil, demote setup and background errors to warnings."
 	                                     (git-overleaf--ensure-authenticated-async
 	                                      "overwriting the Overleaf remote"
 	                                      (lambda ()
-		                                    (git-overleaf--async-start
-		                                     (format "Overleaf remote overwrite `%s'"
+			                                    (git-overleaf--async-start
+			                                     (format "Overleaf remote overwrite `%s'"
 				                                     (git-overleaf--project-name repo))
-		                                     (lambda ()
-			                                   (git-overleaf--overwrite-remote-sync repo unstaged-action t))
-	                                     :key (git-overleaf--repo-async-key repo)))))))
+			                                     (lambda ()
+				                                   (git-overleaf--overwrite-remote-sync repo unstaged-action t))
+	                                     :key (git-overleaf--repo-async-key repo)
+	                                     :on-success
+	                                     (lambda (_value)
+	                                       (git-overleaf--notify-operation-succeeded
+	                                        repo 'overwrite)
+	                                       (git-overleaf--message
+	                                        "Finished Overleaf remote overwrite `%s'"
+	                                        (git-overleaf--project-name repo)))))))))
 
 (defun git-overleaf--pull-async (repo)
   "Start an asynchronous pull for REPO."
@@ -361,9 +371,88 @@ When NOERROR is non-nil, demote setup and background errors to warnings."
 		                                   (format "Overleaf pull `%s'" (git-overleaf--project-name repo))
 		                                   (lambda ()
 		                                     (git-overleaf--pull-sync repo t))
-		                                   :key (git-overleaf--repo-async-key repo))))))
+		                                   :key (git-overleaf--repo-async-key repo)
+		                                   :on-success
+		                                   (lambda (_value)
+		                                     (git-overleaf--notify-operation-succeeded
+		                                      repo 'pull)
+		                                     (git-overleaf--message
+		                                      "Finished Overleaf pull `%s'"
+		                                      (git-overleaf--project-name repo))))))))
+
+(defun git-overleaf--fetch-sync (repo &optional skip-auth)
+  "Synchronously fetch the latest Overleaf snapshot for REPO.
+Update only the hidden remote snapshot ref.  When SKIP-AUTH is non-nil,
+assume the caller already checked authentication."
+  (git-overleaf--with-repo-log-context repo
+    (git-overleaf--set-repo-url repo)
+    (unless skip-auth
+      (git-overleaf--ensure-authenticated "fetching from Overleaf"))
+    (git-overleaf--with-downloaded-snapshot
+     (git-overleaf--project-id repo)
+     (lambda (remote-root)
+       (let ((commit
+              (git-overleaf--record-remote-snapshot repo remote-root)))
+         (git-overleaf--message
+          "Fetched Overleaf project `%s'"
+          (git-overleaf--project-name repo))
+         commit)))))
+
+(defun git-overleaf--fetch-async (repo)
+  "Start an asynchronous Overleaf snapshot fetch for REPO."
+  (git-overleaf--with-repo-log-context repo
+    (git-overleaf--set-repo-url repo)
+    (git-overleaf--ensure-authenticated-async
+     "fetching from Overleaf"
+     (lambda ()
+       (git-overleaf--async-start
+        (format "Overleaf fetch `%s'" (git-overleaf--project-name repo))
+        (lambda () (git-overleaf--fetch-sync repo t))
+        :key (git-overleaf--repo-async-key repo)
+        :on-success
+        (lambda (_commit)
+          (git-overleaf--notify-operation-succeeded repo 'fetch)
+          (git-overleaf--message
+           "Finished Overleaf fetch `%s'"
+           (git-overleaf--project-name repo))))))))
 
 ;;;; Interactive commands
+
+;;;###autoload
+(defun git-overleaf-register-remote (&optional directory name)
+  "Register a branchless logical Overleaf remote for DIRECTORY.
+NAME defaults to `git-overleaf-remote-name'.  This writes only local Git
+configuration and initializes the hidden remote snapshot ref from the
+existing synchronization base; it does not access Overleaf."
+  (interactive)
+  (let* ((repo (git-overleaf--require-managed-repo directory))
+         (name
+          (or name
+              (read-string
+               "Logical Overleaf remote name: "
+               git-overleaf-remote-name)))
+         (remote (git-overleaf--register-remote repo name))
+         (base (git-overleaf--rev-parse repo (git-overleaf--base-ref repo))))
+    (git-overleaf--git-config-set
+     repo "git-overleaf.remoteRef" git-overleaf-remote-ref)
+    (unless (git-overleaf--rev-parse-noerror repo (git-overleaf--remote-ref repo))
+      (git-overleaf--set-remote-ref repo base))
+    (git-overleaf--message
+     "Registered branchless Overleaf remote `%s'" remote)
+    remote))
+
+;;;###autoload
+(defun git-overleaf-fetch (&optional directory)
+  "Fetch the latest Overleaf snapshot for the repository at DIRECTORY.
+Only the hidden remote snapshot ref is updated; HEAD, the working tree,
+and the last-synchronized base ref are left unchanged."
+  (interactive)
+  (let ((repo (git-overleaf--require-managed-repo directory)))
+    (if (and (called-interactively-p 'interactive)
+             (git-overleaf--async-enabled-p))
+        (git-overleaf--fetch-async repo)
+      (prog1 (git-overleaf--fetch-sync repo nil)
+        (git-overleaf--notify-operation-succeeded repo 'fetch)))))
 
 ;;;###autoload
 (defun git-overleaf-clone (&optional url target-directory)
@@ -422,14 +511,18 @@ useful for hooks such as `git-commit-post-finish-hook'."
                (git-overleaf--async-enabled-p)))
       (git-overleaf--push-async repo noerror))
      (noerror
-      (git-overleaf--with-repo-log-context repo
+     (git-overleaf--with-repo-log-context repo
 		                                   (condition-case err
-			                                   (git-overleaf--push-sync repo)
+			                                   (prog1
+			                                       (git-overleaf--push-sync repo)
+			                                     (git-overleaf--notify-operation-succeeded
+			                                      repo 'push))
 		                                     (error
 		                                      (git-overleaf--warn "Automatic Overleaf push failed for %s: %s"
 								                                  repo (error-message-string err))))))
      (t
-      (git-overleaf--push-sync repo)))))
+      (prog1 (git-overleaf--push-sync repo)
+        (git-overleaf--notify-operation-succeeded repo 'push))))))
 
 (defun git-overleaf--push-sync (repo &optional unstaged-action skip-auth)
   "Internal: perform the actual push for managed REPO.
@@ -482,7 +575,8 @@ aborted."
         (git-overleaf--overwrite-remote-async repo)
       (when interactive-p
         (git-overleaf--confirm-overwrite-remote repo))
-      (git-overleaf--overwrite-remote-sync repo nil nil))))
+      (prog1 (git-overleaf--overwrite-remote-sync repo nil nil)
+        (git-overleaf--notify-operation-succeeded repo 'overwrite)))))
 
 ;;;###autoload
 (define-obsolete-function-alias
@@ -543,7 +637,8 @@ commit, then run `git-overleaf-push' to complete the sync."
     (if (and (called-interactively-p 'interactive)
              (git-overleaf--async-enabled-p))
         (git-overleaf--pull-async repo)
-      (git-overleaf--pull-sync repo nil))))
+      (prog1 (git-overleaf--pull-sync repo nil)
+        (git-overleaf--notify-operation-succeeded repo 'pull)))))
 
 (defun git-overleaf--pull-sync (repo &optional skip-auth)
   "Synchronously pull the latest Overleaf snapshot into REPO.
@@ -614,9 +709,11 @@ already changed local or remote state are not rolled back."
   "a" #'git-overleaf-authenticate
   "b" #'git-overleaf-browse-remote
   "c" #'git-overleaf-clone
+  "f" #'git-overleaf-fetch
   "k" #'git-overleaf-force-stop
   "l" #'git-overleaf-pull
   "p" #'git-overleaf-push
+  "r" #'git-overleaf-register-remote
   "s" #'git-overleaf-push)
 
 
