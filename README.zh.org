@@ -334,7 +334,8 @@ M-x git-overleaf-overwrite-remote
 这是一个恢复命令。它使用与 ~git-overleaf-push~ 相同的本地准备流程，但
 总是用本地 ~HEAD~ 快照替换远端 Overleaf 项目内容。已有远端文本文档在支持
 时仍会通过文本 OT 更新；其他条目使用 Overleaf 上传和删除 API。只有在确实
-希望本地状态替换远端状态时才应使用该命令。交互式运行时总会要求确认。
+希望本地状态替换远端状态时才应使用该命令。交互式运行时总会要求确认。它在
+语义上等价于 ~git push --force~。
 
 成功覆盖还会放弃并清除 pending Overleaf pull，因此手动中止 pull 的 merge
 或 pending 元数据过期时，可以用该命令恢复。命令不会自动中止 Git merge，
@@ -481,10 +482,13 @@ Magit 的 fetch、pull 和 push transient 都会增加一个大写 =O= 动作，
 fetch/pull/push”；选择后先请求确认，使用默认名字注册（若同名 remote 已存在，
 则提示输入另一个名字），再继续原操作。它们不接受分支：fetch 只更新
 ~refs/git-overleaf/remote~，pull 调用 ~git-overleaf-pull~，push 调用
-~git-overleaf-push~。已启用的 Git 专用 transient 参数会被拒绝。从 Magit
-普通的 “fetch elsewhere” 选择该逻辑 remote 且不提供参数时，也会转交给
-git-overleaf；分支和 refspec 不受支持。其他 Git remote 仍保持 Magit 原始
-行为。显式 =O= fetch 不受自动刷新节流限制。
+~git-overleaf-push~。push 动作支持 Magit 的 force 参数：=-f=（force with
+lease）仍走安全 push，因为 git-overleaf 已经会拒绝与已记录 base 不同的远端
+快照；=-F=（force）则先请求确认，再调用
+~git-overleaf-overwrite-remote~。其他已启用的 Git 专用 transient 参数会被
+拒绝。从 Magit 普通的 “fetch elsewhere” 选择该逻辑 remote 且不提供参数时，
+也会转交给 git-overleaf；分支和 refspec 不受支持。其他 Git remote 仍保持
+Magit 原始行为。显式 =O= fetch 不受自动刷新节流限制。
 
 在 Overleaf section 上，=G= 刷新远端，=RET= 在浏览器中打开项目。
 =C-c C-c= 是命令前缀，包含：
@@ -496,7 +500,7 @@ git-overleaf；分支和 refspec 不受支持。其他 Git remote 仍保持 Magi
 | =l= | 从 Overleaf 拉取。 |
 | =p= | 推送到 Overleaf。 |
 | =r= | 注册逻辑 Overleaf remote。 |
-| =O= | 确认后覆盖远端。 |
+| =O= | 确认后 force-push 到远端。 |
 | =L= | 显示 git-overleaf 日志。 |
 | =k= | 停止后台 Overleaf 操作。 |
 
