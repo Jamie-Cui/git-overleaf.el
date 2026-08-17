@@ -372,7 +372,8 @@ contents with the local ~HEAD~ snapshot.  Existing remote text documents
 are still updated through text OT when supported; other entries use
 Overleaf upload and delete APIs.  Use this command only when the local
 state is intended to replace the remote state.  The interactive command
-always asks for confirmation.
+always asks for confirmation.  This is git-overleaf's semantic equivalent
+of ~git push --force~.
 
 A successful overwrite also abandons and clears a pending Overleaf pull,
 so this command is the recovery path after a pull was manually aborted or
@@ -546,11 +547,15 @@ then fetch, pull, or push.  Selecting it asks for confirmation, registers
 the default name (or prompts for another name after a collision), and
 continues the requested operation.  These actions are branchless: fetch
 updates only ~refs/git-overleaf/remote~, pull runs ~git-overleaf-pull~, and
-push runs ~git-overleaf-push~.  Active Git-only transient arguments are
-rejected.  Selecting the logical remote from Magit's ordinary "fetch
+push normally runs ~git-overleaf-push~.  The push action honors Magit's
+force arguments: =-f= (force with lease) uses the same guarded push because
+git-overleaf already rejects a remote snapshot that differs from its
+recorded base, while =-F= (force) asks for confirmation and runs
+~git-overleaf-overwrite-remote~.  Other active Git-only transient arguments
+are rejected.  Selecting the logical remote from Magit's ordinary "fetch
 elsewhere" action also routes a no-argument fetch through git-overleaf;
 branches and refspecs are unsupported.  All other Git remotes retain
-Magit's normal behavior.  Explicit =O= fetch bypasses the automatic
+Magit's normal behavior.  Explicit =O= fetch bypasses the automatic remote
 refresh throttle.
 
 On the Overleaf section, =G= refreshes the remote and =RET= opens the
@@ -563,7 +568,7 @@ project in a browser.  =C-c C-c= is a command prefix with these keys:
 | =l= | Pull from Overleaf. |
 | =p= | Push to Overleaf. |
 | =r= | Register the logical Overleaf remote. |
-| =O= | Overwrite the remote after confirmation. |
+| =O= | Force-push to the remote after confirmation. |
 | =L= | Show the git-overleaf log. |
 | =k= | Stop background Overleaf operations. |
 

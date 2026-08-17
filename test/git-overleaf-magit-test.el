@@ -108,6 +108,44 @@
      (equal (git-overleaf-magit--operation-description "fetch")
             "Overleaf"))))
 
+(ert-deftest git-overleaf-magit-test-push-mode ()
+  (should (eq (git-overleaf-magit--push-mode nil) 'normal))
+  (should
+   (eq (git-overleaf-magit--push-mode '("--force-with-lease"))
+       'normal))
+  (should (eq (git-overleaf-magit--push-mode '("-f")) 'force))
+  (should (eq (git-overleaf-magit--push-mode '("--force")) 'force))
+  (should-error
+   (git-overleaf-magit--push-mode '("--dry-run"))
+   :type 'user-error)
+  (should-error
+   (git-overleaf-magit--push-mode '("--force-with-lease" "--force"))
+   :type 'user-error))
+
+(ert-deftest git-overleaf-magit-test-push-dispatches-force-modes ()
+  (let (commands)
+    (cl-letf (((symbol-function 'git-overleaf-magit--require-managed-repo)
+               (lambda () "/repo"))
+              ((symbol-function
+                'git-overleaf-magit--ensure-registered-remote)
+               (lambda (_repo _operation) "overleaf"))
+              ((symbol-function 'git-overleaf--async-supported-p)
+               (lambda () t))
+              ((symbol-function 'call-interactively)
+               (lambda (command &rest _args)
+                 (push command commands))))
+      (git-overleaf-magit-push nil)
+      (git-overleaf-magit-push '("--force-with-lease"))
+      (git-overleaf-magit-push '("-f"))
+      (git-overleaf-magit-push '("--force"))
+      (should
+       (equal
+        (nreverse commands)
+        '(git-overleaf-push
+          git-overleaf-push
+          git-overleaf-overwrite-remote
+          git-overleaf-overwrite-remote))))))
+
 (ert-deftest git-overleaf-magit-test-ensure-remote-reuses-existing ()
   (cl-letf (((symbol-function 'git-overleaf--remote-name)
              (lambda (_repo) "paper"))

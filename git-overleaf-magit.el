@@ -503,6 +503,24 @@ runs from status insertion or automatic refresh paths."
        "Git arguments do not apply to Overleaf: %s"
        (mapconcat #'identity args " ")))))
 
+(defun git-overleaf-magit--push-mode (args)
+  "Return the Overleaf push mode selected by Magit ARGS.
+No arguments and `--force-with-lease' select the normal guarded push.
+The Git `-f' and `--force' arguments select a remote overwrite.  Signal
+when ARGS contains any other argument or combines the two force modes."
+  (cond
+   ((null args) 'normal)
+   ((equal args '("--force-with-lease")) 'normal)
+   ((and (null (cdr args))
+         (member (car args) '("-f" "--force")))
+    'force)
+   (t
+    (user-error
+     (concat
+      "Only --force-with-lease and --force apply to Overleaf pushes; "
+      "got: %s")
+     (mapconcat #'identity args " ")))))
+
 (transient-define-suffix git-overleaf-magit-fetch ()
   "Fetch the branchless logical Overleaf remote."
   :description #'git-overleaf-magit--fetch-description
@@ -524,17 +542,20 @@ runs from status insertion or automatic refresh paths."
            (git-overleaf--async-supported-p)))
       (call-interactively #'git-overleaf-pull))))
 
-(transient-define-suffix git-overleaf-magit-push ()
+(transient-define-suffix git-overleaf-magit-push (args)
   "Push the branchless logical Overleaf remote."
   :description #'git-overleaf-magit--push-description
-  (interactive)
-  (git-overleaf-magit--reject-arguments 'magit-push)
-  (let ((repo (git-overleaf-magit--require-managed-repo)))
+  (interactive (list (magit-push-arguments)))
+  (let ((mode (git-overleaf-magit--push-mode args))
+        (repo (git-overleaf-magit--require-managed-repo)))
     (git-overleaf-magit--ensure-registered-remote repo "push")
     (let ((default-directory repo)
           (git-overleaf-enable-async
            (git-overleaf--async-supported-p)))
-      (call-interactively #'git-overleaf-push))))
+      (call-interactively
+       (if (eq mode 'force)
+           #'git-overleaf-overwrite-remote
+         #'git-overleaf-push)))))
 
 (defun git-overleaf-magit--around-git-fetch (function remote args)
   "Route a branchless fetch of logical REMOTE through git-overleaf.
