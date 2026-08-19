@@ -122,6 +122,17 @@
    (git-overleaf-magit--push-mode '("--force-with-lease" "--force"))
    :type 'user-error))
 
+(ert-deftest git-overleaf-magit-test-fetch-mode ()
+  (should (eq (git-overleaf-magit--fetch-mode nil) 'normal))
+  (should (eq (git-overleaf-magit--fetch-mode '("-f")) 'force))
+  (should (eq (git-overleaf-magit--fetch-mode '("--force")) 'force))
+  (should-error
+   (git-overleaf-magit--fetch-mode '("--prune"))
+   :type 'user-error)
+  (should-error
+   (git-overleaf-magit--fetch-mode '("--force" "--prune"))
+   :type 'user-error))
+
 (ert-deftest git-overleaf-magit-test-push-dispatches-force-modes ()
   (let (commands)
     (cl-letf (((symbol-function 'git-overleaf-magit--require-managed-repo)
@@ -389,7 +400,8 @@
 
 (ert-deftest git-overleaf-magit-test-fetch-routing ()
   (let ((ordinary nil)
-        (overleaf nil))
+        (overleaf nil)
+        (commands nil))
     (cl-letf (((symbol-function 'magit-toplevel)
                (lambda () "/repo"))
               ((symbol-function 'git-overleaf--managed-repo-p)
@@ -398,7 +410,12 @@
                (lambda (_repo) "overleaf"))
               ((symbol-function 'git-overleaf-magit-refresh-remote)
                (lambda (&optional background)
-                 (setq overleaf background))))
+                 (setq overleaf background)))
+              ((symbol-function 'git-overleaf--async-supported-p)
+               (lambda () t))
+              ((symbol-function 'call-interactively)
+               (lambda (command &rest _args)
+                 (push command commands))))
       (git-overleaf-magit--around-git-fetch
        (lambda (remote args) (setq ordinary (list remote args)))
        "overleaf"
@@ -412,6 +429,11 @@
        '("--prune"))
       (should (equal ordinary '("origin" ("--prune"))))
       (should-not overleaf)
+      (git-overleaf-magit--around-git-fetch
+       (lambda (&rest _args) (ert-fail "ordinary fetch was called"))
+       "overleaf"
+       '("--force"))
+      (should (equal commands '(git-overleaf-overwrite-local)))
       (should-error
        (git-overleaf-magit--around-git-fetch
         (lambda (&rest _args) (ert-fail "ordinary fetch was called"))
@@ -419,12 +441,9 @@
         '("main"))
        :type 'user-error))))
 
-(ert-deftest git-overleaf-magit-test-explicit-fetch-registers-before-refresh ()
+(ert-deftest git-overleaf-magit-test-explicit-fetch-registers-before-dispatch ()
   (let (calls)
-    (cl-letf (((symbol-function 'git-overleaf-magit--reject-arguments)
-               (lambda (prefix)
-                 (push (list 'reject prefix) calls)))
-              ((symbol-function 'git-overleaf-magit--require-managed-repo)
+    (cl-letf (((symbol-function 'git-overleaf-magit--require-managed-repo)
                (lambda () "/repo"))
               ((symbol-function
                 'git-overleaf-magit--ensure-registered-remote)
@@ -432,14 +451,21 @@
                  (push (list 'ensure repo operation) calls)))
               ((symbol-function 'git-overleaf-magit-refresh-remote)
                (lambda (&optional background)
-                 (push (list 'refresh background) calls))))
-      (git-overleaf-magit-fetch)
+                 (push (list 'refresh background) calls)))
+              ((symbol-function 'git-overleaf--async-supported-p)
+               (lambda () t))
+              ((symbol-function 'call-interactively)
+               (lambda (command &rest _args)
+                 (push (list 'command command) calls))))
+      (git-overleaf-magit-fetch nil)
+      (git-overleaf-magit-fetch '("--force"))
       (should
        (equal
         (nreverse calls)
-        '((reject magit-fetch)
+        '((ensure "/repo" "fetch")
+          (refresh t)
           (ensure "/repo" "fetch")
-          (refresh t)))))))
+          (command git-overleaf-overwrite-local)))))))
 
 (ert-deftest git-overleaf-magit-test-operation-succeeded-refreshes-status ()
   (let ((buffer (generate-new-buffer " *overleaf-status-test*"))
@@ -473,6 +499,9 @@
   (should
    (eq (lookup-key git-overleaf-magit-command-map (kbd "p"))
        #'git-overleaf-push))
+  (should
+   (eq (lookup-key git-overleaf-magit-command-map (kbd "F"))
+       #'git-overleaf-overwrite-local))
   (should
    (keymapp
     (lookup-key git-overleaf-magit-section-map (kbd "C-c C-c")))))

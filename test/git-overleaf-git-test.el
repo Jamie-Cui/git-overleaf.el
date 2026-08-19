@@ -431,6 +431,65 @@
                       "--format=%(refname)"
                       "refs/git-overleaf/backups")))))))
 
+(ert-deftest git-overleaf-git-test-overwrite-local-replaces-worktree ()
+  (let ((git-overleaf-log-echo nil)
+        (git-overleaf-local-backups-enabled t))
+    (git-overleaf-git-test--with-repo repo
+      (git-overleaf-git-test--base-commit repo "base\n")
+      (git-overleaf-git-test--write-file repo "main.tex" "local\n")
+      (git-overleaf-git-test--write-file repo "local-only.tex" "local\n")
+      (let ((local-head
+             (git-overleaf-git-test--commit-all repo "local commit")))
+        (git-overleaf-git-test--write-file repo "main.tex" "dirty\n")
+        (git-overleaf-git-test--write-file repo "untracked.tex" "discard\n")
+        (git-overleaf--set-pending-pull-state repo local-head)
+        (git-overleaf-git-test--with-temp-dir remote-root
+          (git-overleaf-git-test--write-file remote-root "main.tex" "remote\n")
+          (let ((remote-commit
+                 (git-overleaf--overwrite-local-with-remote repo remote-root)))
+            (should (equal (git-overleaf--rev-parse repo "HEAD")
+                           remote-commit))
+            (should (equal (git-overleaf-git-test--read-file
+                            repo
+                            "main.tex")
+                           "remote\n"))
+            (should-not (file-exists-p
+                         (expand-file-name "local-only.tex" repo)))
+            (should-not (file-exists-p
+                         (expand-file-name "untracked.tex" repo)))
+            (should (equal (git-overleaf--rev-parse
+                            repo
+                            (git-overleaf--base-ref repo))
+                           remote-commit))
+            (should (equal (git-overleaf--rev-parse
+                            repo
+                            (git-overleaf--remote-ref repo))
+                           remote-commit))
+            (should-not (git-overleaf--pending-state repo))
+            (let ((backup-commits
+                   (git-overleaf-git-test--git
+                    repo
+                    "for-each-ref"
+                    "--format=%(objectname)"
+                    "refs/git-overleaf/backups")))
+              (should (string-match-p (regexp-quote local-head)
+                                      backup-commits)))))))))
+
+(ert-deftest git-overleaf-git-test-overwrite-local-preserves-ignored-files ()
+  (let ((git-overleaf-log-echo nil))
+    (git-overleaf-git-test--with-repo repo
+      (git-overleaf-git-test--base-commit repo "base\n")
+      (git-overleaf-git-test--write-file repo ".gitignore" "secret.txt\n")
+      (git-overleaf-git-test--commit-all repo "ignore secret")
+      (git-overleaf-git-test--write-file repo "secret.txt" "preserve\n")
+      (git-overleaf-git-test--with-temp-dir remote-root
+        (git-overleaf-git-test--write-file remote-root "main.tex" "remote\n")
+        (git-overleaf--overwrite-local-with-remote repo remote-root)
+        (should (equal (git-overleaf-git-test--read-file
+                        repo
+                        "secret.txt")
+                       "preserve\n"))))))
+
 (ert-deftest git-overleaf-git-test-working-tree-error-branches ()
   (let ((git-overleaf-log-echo nil))
     (git-overleaf-git-test--with-repo repo
