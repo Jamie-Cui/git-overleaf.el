@@ -157,10 +157,8 @@ clone、push 或 pull 前需要有效的 Overleaf 会话 cookies。主要命令�
 M-x git-overleaf-authenticate
 #+end_example
 
-如果 ~git-overleaf-clone~、~git-overleaf-init~、
-~git-overleaf-fetch~、~git-overleaf-overwrite-local~、~git-overleaf-push~、
-~git-overleaf-overwrite-remote~ 或
-~git-overleaf-pull~ 启动时没有有效 cookies，命令会在 minibuffer 中提示
+如果 ~git-overleaf-clone~、~git-overleaf-init~、~git-overleaf-fetch~、
+~git-overleaf-push~ 或 ~git-overleaf-pull~ 启动时没有有效 cookies，命令会在 minibuffer 中提示
 先运行 ~git-overleaf-authenticate~。
 
 ** Webdriver 后端
@@ -264,12 +262,15 @@ clone 或 init 后，将该仓库作为普通 Git 工作树使用：
 - 运行 ~git-overleaf-push~ 上传本地提交；
 - 运行 ~git-overleaf-pull~ 合入远端 Overleaf 改动。
 
-~git-overleaf-push~ 会在访问 Overleaf 前准备本地分支。如果存在已暂存
-改动，它会自动提交；如果存在未暂存或未跟踪文件，它会询问是否先暂存所有
-改动。随后它会获取最新远端快照，并且只在远端未分叉时上传本地 ~HEAD~。
+~git-overleaf-push~ 只上传已经提交的 ~HEAD~。它不会暂存或提交文件，工作树
+中的已暂存、未暂存和未跟踪改动都保持不变。命令会获取最新远端快照，并且
+只在远端未分叉时上传 ~HEAD~。
 
-~git-overleaf-pull~ 要求工作树干净，并且必须在普通分支上运行，不能在
-detached ~HEAD~ 状态下运行。
+与 ~git pull~ 一样，只要 Git 能在不覆盖本地改动的情况下完成合并，
+~git-overleaf-pull~ 就允许工作树中存在已暂存、未暂存和未跟踪的改动；
+不重叠的改动会保留。如果远端改动会覆盖本地改动，Git 会拒绝合并并原样
+保留这些本地改动。pull 仍必须在普通分支上运行，不能处于 detached ~HEAD~
+状态。
 
 ** 推送到 Overleaf
 
@@ -293,6 +294,13 @@ M-x git-overleaf-push
 | 远端已经与 ~HEAD~ 一致 | 只更新 base ref。 |
 | 只有远端发生变化 | 停止并提示运行 ~git-overleaf-pull~。 |
 | 本地与远端都发生了不同变化 | 停止并提示先 pull。 |
+
+使用前缀参数 ~C-u M-x git-overleaf-push~ 等价于 ~git push --force~：确认
+后用本地 ~HEAD~ 替换发生分叉的远端内容。Lisp API 的第二个参数为 FORCE。
+
+Overleaf 上传由多次 API 修改组成。首次修改远端前，push 会记录恢复 journal。
+若上传中断，再次 push 会在远端只是同一目标的部分结果时安全续传；如果
+Overleaf 还产生了独立改动，运行 pull 合并，或明确 force-push 覆盖。
 
 对于远端已有的 Overleaf 文本文档，发生变化的 UTF-8 文本会通过 Overleaf 的
 实时 ShareJS 文本 OT 路径更新。这样会保留远端文档 id，并在 Overleaf Web
@@ -324,43 +332,40 @@ M-x git-overleaf-pull
 如果因远端分叉产生了干净合并，请随后运行 ~git-overleaf-push~，将合并
 结果发布回 Overleaf。
 
-** 用 Overleaf 覆盖本地分支
+pull 会保留与远端传入路径不重叠的本地改动。如果 Git 因本地改动会被覆盖
+而拒绝合并，远端快照仍会完成 fetch，但不会记录 pending pull；请先提交、
+stash 或移走重叠改动，再重试 pull。
+
+解决 pull 冲突并提交后，普通 push 会完成同步。如果此时 Overleaf 又发生
+变化，再次运行 pull 即可；它会继续合并新快照，而不会仅因存在 pending pull
+就拒绝操作。
+
+** Reset 到缓存的 Overleaf 快照
 
 执行：
 
 #+begin_example
-M-x git-overleaf-overwrite-local
+M-x git-overleaf-fetch
+M-x git-overleaf-reset
 #+end_example
 
-这是 force push 的破坏性反向操作：它先下载最新 Overleaf 快照，在启用本地
-备份时为原本地 ~HEAD~ 创建安全 ref，再用远端快照替换当前分支、索引和工作
-树。已暂存、未暂存及未跟踪改动都会被丢弃；忽略文件会保留。交互式命令总会要求确认，并
-拒绝 detached ~HEAD~。
+reset 不访问网络，而是以 ~refs/git-overleaf/remote~ 中已经缓存的快照为
+目标。无前缀时采用 mixed reset 语义：移动 HEAD 并重置索引，但保留工作树
+文件。~C-u M-x git-overleaf-reset~ 采用 hard reset 语义，同时替换已跟踪的
+工作树文件。两种模式都保留未跟踪和忽略文件，命令永远不会运行 ~git clean~。
+移动 HEAD 前会创建安全 ref；成功后更新 base 并清除 pending 同步元数据。
 
-只有在快照成功下载后，命令才会 clean 和 reset 本地仓库。成功后会同时更新
-base ref 与 remote ref，并清除 pending Overleaf pull。
-~refs/git-overleaf/backups/~ 下的安全 ref 能保留已经提交的本地历史，但不能
-恢复被丢弃的未提交或未跟踪内容。
-
-** 覆盖 Overleaf 远端
+** Force-push 到 Overleaf
 
 执行：
 
 #+begin_example
-M-x git-overleaf-overwrite-remote
+C-u M-x git-overleaf-push
 #+end_example
 
-这是一个恢复命令。它使用与 ~git-overleaf-push~ 相同的本地准备流程，但
-总是用本地 ~HEAD~ 快照替换远端 Overleaf 项目内容。已有远端文本文档在支持
-时仍会通过文本 OT 更新；其他条目使用 Overleaf 上传和删除 API。只有在确实
-希望本地状态替换远端状态时才应使用该命令。交互式运行时总会要求确认。它在
-语义上等价于 ~git push --force~。
-
-成功覆盖还会放弃并清除 pending Overleaf pull，因此手动中止 pull 的 merge
-或 pending 元数据过期时，可以用该命令恢复。命令不会自动中止 Git merge，
-也不会自动丢弃未解决的冲突：请先解决并提交 merge，或运行
-~git merge --abort~，再重新执行覆盖。如果覆盖失败，pending 状态会保留，
-以便安全重试。
+force push 使用同一条只上传 HEAD 的路径，但会有意替换发生分叉的远端内容。
+存在活动或未解决的 Git merge 时它会拒绝执行。成功后会清除原 pending 同步
+状态；如果中途失败，则保留可续传的 push journal。
 
 ** 冲突处理
 
@@ -374,14 +379,13 @@ Git 合并机制，将下载下来的远端快照合并到当前分支。
 - 创建 merge commit；
 - 运行 ~git-overleaf-push~ 上传合并结果。
 
-如果要放弃这次 pull 并保留本地版本，请先解决冲突或运行
-~git merge --abort~，再运行 ~git-overleaf-overwrite-remote~。该命令会明确
-使用随后得到的本地 ~HEAD~ 替换 Overleaf，并且只在覆盖成功后清除 pending
-pull。
+要放弃活动的 pull，运行 ~git-overleaf-pull-abort~。它执行
+~git merge --abort~，并且只在 Git 成功后清除 pending 元数据。如果 merge
+已经手动中止，它只清除过期元数据。merge 已提交后它会拒绝执行，因为静默
+改写已提交历史并不安全。
 
-如果要放弃 pull 并接受远端版本，运行 ~git-overleaf-overwrite-local~。确认
-后，它会丢弃 merge 工作树和本地改动，使用 Overleaf 替换当前分支，并且只
-在本地覆盖成功后清除 pending pull。
+中止后，可以 force push 保留本地内容；也可以用 ~git-overleaf-reset~ 接受
+缓存的远端快照（前缀参数选择 hard 模式）。
 
 冲突处理有意交给 Git，而不是 ediff。
 
@@ -390,18 +394,13 @@ pull。
 clone、init、push 和 pull 命令会将项目元数据存入仓库的本地 Git 配置。仓
 库绑定后，可以从该仓库内任意目录继续运行 push 和 pull。
 
-clone 和 init 还会默认注册名为 =overleaf= 的无分支逻辑 Git remote。它没有
-URL、push URL 或 refspec；本地 config marker 将它与 Overleaf 项目关联，
-=skipFetchAll= 和 =skipDefaultUpdate= 则避免普通 Git 批量操作访问它。最近一次
-成功观察到的远端快照保存在 ~refs/git-overleaf/remote~，与记录同步基线的
-~refs/git-overleaf/base~ 相互独立。=origin= 等普通 remote 不受影响。
+clone 和 init 可以注册名为 =overleaf= 的无分支逻辑 Git remote。它没有 URL、
+push URL 或 refspec；其本地标记让 Magit 在普通 remote 选择中把该名字转交给
+git-overleaf。逻辑 remote 是可选的：所有 git-overleaf 命令以及显式 Magit
+=O= 动作都不依赖它。只有需要这种路由时才运行 ~git-overleaf-register-remote~。
 
-旧版本创建的仓库可以运行一次 ~git-overleaf-register-remote~，也可以在 Magit
-中执行显式的大写 =O= 操作；后者会先询问是否注册，再继续原操作。如果
-=overleaf= 已经是一个真实 Git remote，clone/init 会保留它，Magit 的交互式
-注册则会提示输入另一个名字。普通的 ~git remote rename~ 和
-~git remote remove~ 都可使用。打开或刷新 Magit status buffer 永远不会注册
-remote，因此删除逻辑 remote 后，只有再次明确执行 =O= 并确认才会重建。
+最近一次成功观察到的远端快照保存在 ~refs/git-overleaf/remote~，与记录同步
+基线的 ~refs/git-overleaf/base~ 相互独立。=origin= 等普通 remote 不受影响。
 
 当 ~git-overleaf-sync-metadata-enabled~ 为非 nil 时，成功的 push 操作
 会在 Overleaf 项目根目录维护 ~.git-overleaf-sync.json~。该文件记录本
@@ -438,7 +437,8 @@ Emacs 响应：
 #+end_src
 
 交互命令仍会在前台收集 minibuffer 输入和确认，随后在后台执行耗时工作。
-这适用于 clone、init、push、pull、远端覆盖、认证和 Magit 远端刷新。
+这适用于 clone、init、fetch、push、pull、认证和 Magit 远端刷新。status、
+reset 与 pull-abort 都是本地操作。
 
 取消当前所有已跟踪的 Overleaf 后台操作：
 
@@ -454,7 +454,7 @@ M-x git-overleaf-force-stop
 快照下载会在 ~git-overleaf-log-echo~ 为非 nil 时，在 minibuffer 中显示
 =Downloading project ... N%= 形式的 curl 进度。
 
-push 和 overwrite 会用 =Uploading content for project ... N% (I/T: ACTION PATH)=
+push 会用 =Uploading content for project ... N% (I/T: ACTION PATH)=
 显示已完成的内容变更操作数和当前路径。这是操作级而不是字节级进度，因为一次 push
 可能混合文本 OT 更新、multipart 上传、创建目录和删除操作。因此单个较慢的
 远端请求完成前，百分比可能暂时不变。内容达到 100% 后，会用另一条提示标明
@@ -500,19 +500,15 @@ unstaged、untracked 或 unmerged 工作区变化；具体工作区 diff 仍由 
 M-x git-overleaf-magit-refresh-remote
 #+end_example
 
-Magit 的 fetch、pull 和 push transient 都会增加一个大写 =O= 动作，并显示
-逻辑 remote 名。尚未注册时，菜单文案会改为“注册 Overleaf remote 后执行
-fetch/pull/push”；选择后先请求确认，使用默认名字注册（若同名 remote 已存在，
-则提示输入另一个名字），再继续原操作。它们不接受分支：fetch 默认只更新
-~refs/git-overleaf/remote~，pull 调用 ~git-overleaf-pull~，push 调用
-~git-overleaf-push~。fetch 动作接受 =-f=/=--force=，确认后调用
-~git-overleaf-overwrite-local~。push 动作支持 Magit 的 force 参数：=-f=（force with
-lease）仍走安全 push，因为 git-overleaf 已经会拒绝与已记录 base 不同的远端
-快照；=-F=（force）则先请求确认，再调用
-~git-overleaf-overwrite-remote~。其他已启用的 Git 专用 transient 参数会被
-拒绝。从 Magit 普通的 “fetch elsewhere” 选择该逻辑 remote 时，也会转交给
-git-overleaf，并支持同样的 force 参数；分支和 refspec 不受支持。其他 Git
-remote 仍保持 Magit 原始行为。显式 =O= fetch 不受自动刷新节流限制。
+Magit 的 fetch、pull 和 push transient 都会增加一个大写 =O= 动作。这些显式
+动作不依赖逻辑 remote。fetch 只更新 ~refs/git-overleaf/remote~；=-f=/
+=--force= 不会把 fetch 变成 reset。pull 调用 ~git-overleaf-pull~。push 调用
+~git-overleaf-push~；Magit 的 force 选项会给同一个命令传入前缀并请求确认，
+=--force-with-lease= 则保持普通受保护 push。其他 Git 专用参数会被拒绝。
+
+注册逻辑 remote 后，从 Magit 普通 fetch 动作选择它会把快照刷新转交给
+git-overleaf；不支持分支和 refspec。其他 Git remote 保持 Magit 原始行为。
+显式 =O= fetch 不受自动刷新节流限制。
 
 在 Overleaf section 上，=G= 刷新远端，=RET= 在浏览器中打开项目。
 =C-c C-c= 是命令前缀，包含：
@@ -520,12 +516,14 @@ remote 仍保持 Magit 原始行为。显式 =O= fetch 不受自动刷新节流�
 | 按键 | 命令 |
 |------+------|
 | =b= | 浏览 Overleaf 项目。 |
-| =F= | 确认后用 Overleaf 覆盖本地状态。 |
+| =f= | 获取远端快照。 |
 | =g= | 刷新远端快照。 |
 | =l= | 从 Overleaf 拉取。 |
 | =p= | 推送到 Overleaf。 |
+| =q= | 中止 pending pull。 |
+| =R= | Reset 到缓存的远端快照。 |
 | =r= | 注册逻辑 Overleaf remote。 |
-| =O= | 确认后 force-push 到远端。 |
+| =s= | 显示缓存的同步状态。 |
 | =L= | 显示 git-overleaf 日志。 |
 | =k= | 停止后台 Overleaf 操作。 |
 
@@ -536,7 +534,7 @@ remote 仍保持 Magit 原始行为。显式 =O= fetch 不受自动刷新节流�
 #+begin_src elisp
   (with-eval-after-load 'git-commit
     (add-hook 'git-commit-post-finish-hook
-              (lambda () (git-overleaf-push nil t))))
+              (lambda () (git-overleaf-push nil nil t))))
 #+end_src
 
 该 hook 只会 push 已经包含 Overleaf 项目元数据的仓库。命令同步运行时，该
@@ -551,11 +549,12 @@ hook 会在 push 运行期间阻塞 Emacs。启用 ~git-overleaf-enable-async~
 | ~git-overleaf-clone~ | 将 Overleaf 项目克隆为新的本地 Git 仓库。 |
 | ~git-overleaf-init~ | 将当前 Git 仓库绑定到 Overleaf 项目。 |
 | ~git-overleaf-register-remote~ | 注册或迁移无分支逻辑 Overleaf remote。 |
+| ~git-overleaf-status~ | 显示缓存的同步、pending、merge 和工作树状态。 |
 | ~git-overleaf-fetch~ | 只刷新最新 Overleaf 快照 ref。 |
-| ~git-overleaf-overwrite-local~ | 用 Overleaf 替换当前本地分支和工作树。 |
 | ~git-overleaf-push~ | 在远端未分叉时上传本地 ~HEAD~ 到 Overleaf。 |
-| ~git-overleaf-overwrite-remote~ | 用本地 ~HEAD~ 替换远端 Overleaf 项目。 |
 | ~git-overleaf-pull~ | 拉取并合并最新 Overleaf 快照。 |
+| ~git-overleaf-pull-abort~ | 中止活动的 pending pull 或清除过期 pull 元数据。 |
+| ~git-overleaf-reset~ | Mixed reset 到缓存远端；前缀参数选择 hard 模式。 |
 | ~git-overleaf-browse-remote~ | 在浏览器中打开已绑定的 Overleaf 项目。 |
 | ~git-overleaf-force-stop~ | 取消已跟踪的 Overleaf 后台操作。 |
 | ~git-overleaf-log~ | 显示全局日志 buffer。 |
@@ -574,15 +573,14 @@ hook 会在 push 运行期间阻塞 Emacs。启用 ~git-overleaf-enable-async~
 | =a= | ~git-overleaf-authenticate~ |
 | =b= | ~git-overleaf-browse-remote~ |
 | =c= | ~git-overleaf-clone~ |
-| =F= | ~git-overleaf-overwrite-local~ |
 | =f= | ~git-overleaf-fetch~ |
 | =k= | ~git-overleaf-force-stop~ |
 | =l= | ~git-overleaf-pull~ |
 | =p= | ~git-overleaf-push~ |
+| =q= | ~git-overleaf-pull-abort~ |
+| =R= | ~git-overleaf-reset~ |
 | =r= | ~git-overleaf-register-remote~ |
-| =s= | ~git-overleaf-push~ |
-
-=s= 绑定作为兼容快捷键保留。
+| =s= | ~git-overleaf-status~ |
 
 * 自定义
 
@@ -597,7 +595,6 @@ hook 会在 push 运行期间阻塞 Emacs。启用 ~git-overleaf-enable-async~
 | ~git-overleaf-enable-async~ | 在后台线程中运行耗时交互操作。 |
 | ~git-overleaf-remote-name~ | 默认的无分支逻辑 remote 名。 |
 | ~git-overleaf-remote-ref~ | 保存最近一次观察到的 Overleaf 快照的 ref。 |
-| ~git-overleaf-sync-auto-commit-message~ | push 前自动本地 checkpoint commit 的提交信息。 |
 | ~git-overleaf-sync-metadata-enabled~ | 启用远端同步元数据文件。 |
 | ~git-overleaf-sync-metadata-file~ | 保留的远端元数据文件名。 |
 | ~git-overleaf-local-backups-enabled~ | 同步操作期间创建本地安全 refs。 |

@@ -110,16 +110,20 @@
          (warnings nil))
      (cl-letf (((symbol-function 'git-overleaf--sync-commit)
                 (lambda (&rest args)
-                  (push args sync-calls)))
+                  (push args sync-calls)
+                  nil))
                ((symbol-function 'git-overleaf--upload-sync-metadata)
                 (lambda (&rest args)
-                  (push args metadata-calls)))
+                  (push args metadata-calls)
+                  nil))
                ((symbol-function 'git-overleaf--message)
                 (lambda (&rest args)
-                  (push args messages)))
+                  (push args messages)
+                  nil))
                ((symbol-function 'git-overleaf--warn)
                 (lambda (&rest args)
-                  (push args warnings))))
+                  (push args warnings)
+                  nil)))
        ,@body)))
 
 (ert-deftest git-overleaf-git-test-commit-directory-and-materialize ()
@@ -326,27 +330,22 @@
                             (git-overleaf--remote-ref repo))
                            head))))))))
 
-(ert-deftest git-overleaf-git-test-overwrite-clears-stale-pending-config ()
+(ert-deftest git-overleaf-git-test-force-push-clears-stale-pending-config ()
   (let ((git-overleaf-log-echo nil))
     (git-overleaf-git-test--with-repo repo
       (let ((head (git-overleaf-git-test--base-commit repo "base\n")))
         (git-overleaf--set-pending-pull-state repo head)
         (should (git-overleaf--pending-state repo))
-        (cl-letf (((symbol-function 'git-overleaf--with-remote-state)
-                   (lambda (_project-id function)
-                     (funcall function "/remote" 'remote-table)))
-                  ((symbol-function 'git-overleaf--read-sync-state)
-                   (lambda (&rest _args)
-                     `(:status diverged :head ,head)))
-                  ((symbol-function 'git-overleaf--upload-head-and-set-base)
-                   (lambda (&rest _args) 'uploaded)))
-          (should (eq (git-overleaf--overwrite-remote-sync
-                       repo 'error t)
-                      'uploaded)))
+        (git-overleaf-git-test--with-temp-dir remote-root
+          (git-overleaf-git-test--write-file remote-root "main.tex" "remote\n")
+          (git-overleaf-git-test--without-remote-side-effects
+            (git-overleaf--fresh-push
+             repo remote-root (git-overleaf-git-test--remote-table) t)
+            (should (= (length sync-calls) 1))))
         (should-not (git-overleaf--pending-state repo))
         (should-not
          (git-overleaf--git-config-get
-          repo "git-overleaf.pendingRemoteCommit"))))))
+          repo "git-overleaf.pendingTargetCommit"))))))
 
 (ert-deftest git-overleaf-git-test-fresh-push-rejects-remote-changes ()
   (let ((git-overleaf-log-echo nil))
@@ -407,6 +406,82 @@
                       "--format=%(refname)"
                       "refs/git-overleaf/backups")))))))
 
+(ert-deftest git-overleaf-git-test-pull-sync-preserves-unrelated-local-change ()
+  (let ((git-overleaf-log-echo nil)
+        (git-overleaf-local-backups-enabled t))
+    (git-overleaf-git-test--with-repo repo
+      (git-overleaf-git-test--base-commit repo "base\n")
+      (git-overleaf-git-test--write-file repo "notes.tex" "base notes\n")
+      (let ((base (git-overleaf-git-test--commit-all repo "add notes")))
+        (git-overleaf--set-base-ref repo base)
+        (git-overleaf--set-remote-ref repo base))
+      (git-overleaf-git-test--write-file repo "notes.tex" "local notes\n")
+      (git-overleaf-git-test--with-temp-dir remote-root
+        (git-overleaf-git-test--write-file remote-root "main.tex" "remote\n")
+        (git-overleaf-git-test--write-file remote-root "notes.tex" "base notes\n")
+        (cl-letf (((symbol-function 'git-overleaf--with-downloaded-snapshot)
+                   (lambda (_project-id function)
+                     (funcall function remote-root))))
+          (git-overleaf--pull-sync repo t))
+        (should (equal (git-overleaf-git-test--read-file repo "main.tex")
+                       "remote\n"))
+        (should (equal (git-overleaf-git-test--read-file repo "notes.tex")
+                       "local notes\n"))
+        (should (git-overleaf--repo-status-unstaged
+                 (git-overleaf--read-repo-status repo)))
+        (should-not (git-overleaf--pending-state repo))))))
+
+(ert-deftest git-overleaf-git-test-diverged-pull-preserves-unrelated-local-change ()
+  (let ((git-overleaf-log-echo nil)
+        (git-overleaf-local-backups-enabled t))
+    (git-overleaf-git-test--with-repo repo
+      (git-overleaf-git-test--base-commit repo "base\n")
+      (git-overleaf-git-test--write-file repo "notes.tex" "base notes\n")
+      (let ((base (git-overleaf-git-test--commit-all repo "add notes")))
+        (git-overleaf--set-base-ref repo base)
+        (git-overleaf--set-remote-ref repo base))
+      (git-overleaf-git-test--write-file repo "local.tex" "committed local\n")
+      (git-overleaf-git-test--commit-all repo "local change")
+      (git-overleaf-git-test--write-file repo "notes.tex" "uncommitted local\n")
+      (git-overleaf-git-test--with-temp-dir remote-root
+        (git-overleaf-git-test--write-file remote-root "main.tex" "remote\n")
+        (git-overleaf-git-test--write-file remote-root "notes.tex" "base notes\n")
+        (git-overleaf--fresh-pull repo remote-root)
+        (should (equal (git-overleaf-git-test--read-file repo "main.tex")
+                       "remote\n"))
+        (should (equal (git-overleaf-git-test--read-file repo "local.tex")
+                       "committed local\n"))
+        (should (equal (git-overleaf-git-test--read-file repo "notes.tex")
+                       "uncommitted local\n"))
+        (should (git-overleaf--repo-status-unstaged
+                 (git-overleaf--read-repo-status repo)))
+        (should-not (git-overleaf--merge-in-progress-p repo))
+        (should-not (git-overleaf--pending-state repo))))))
+
+(ert-deftest git-overleaf-git-test-diverged-pull-rejects-overlapping-local-change ()
+  (let ((git-overleaf-log-echo nil)
+        (git-overleaf-local-backups-enabled t))
+    (git-overleaf-git-test--with-repo repo
+      (let ((base (git-overleaf-git-test--base-commit repo "base\n")))
+        (git-overleaf-git-test--write-file repo "local.tex" "committed local\n")
+        (let ((local-head
+               (git-overleaf-git-test--commit-all repo "local change")))
+          (git-overleaf-git-test--write-file repo "main.tex" "uncommitted local\n")
+          (git-overleaf-git-test--with-temp-dir remote-root
+            (git-overleaf-git-test--write-file remote-root "main.tex" "remote\n")
+            (should-error (git-overleaf--fresh-pull repo remote-root))
+            (should (equal (git-overleaf--rev-parse repo "HEAD") local-head))
+            (should (equal (git-overleaf--rev-parse
+                            repo
+                            (git-overleaf--base-ref repo))
+                           base))
+            (should (equal (git-overleaf-git-test--read-file repo "main.tex")
+                           "uncommitted local\n"))
+            (should-not (git-overleaf--merge-in-progress-p repo))
+            (should-not (git-overleaf--repo-status-unmerged
+                         (git-overleaf--read-repo-status repo)))
+            (should-not (git-overleaf--pending-state repo))))))))
+
 (ert-deftest git-overleaf-git-test-fresh-pull-records-pending-conflict ()
   (let ((git-overleaf-log-echo nil)
         (git-overleaf-local-backups-enabled t))
@@ -431,7 +506,152 @@
                       "--format=%(refname)"
                       "refs/git-overleaf/backups")))))))
 
-(ert-deftest git-overleaf-git-test-overwrite-local-replaces-worktree ()
+(ert-deftest git-overleaf-git-test-committed-pending-pull-integrates-new-remote ()
+  (let ((git-overleaf-log-echo nil))
+    (git-overleaf-git-test--with-repo repo
+      (git-overleaf-git-test--base-commit repo "base\n")
+      (git-overleaf-git-test--write-file repo "main.tex" "local\n")
+      (git-overleaf-git-test--commit-all repo "local")
+      (git-overleaf-git-test--with-temp-dir remote-one
+        (git-overleaf-git-test--write-file remote-one "main.tex" "remote\n")
+        (should (eq (git-overleaf--fresh-pull repo remote-one) 'conflict)))
+      (git-overleaf-git-test--write-file repo "main.tex" "merged\n")
+      (git-overleaf-git-test--commit-all repo "resolve remote one")
+      (should (eq (git-overleaf--pending-phase repo) 'committed))
+      (git-overleaf-git-test--with-temp-dir remote-two
+        (git-overleaf-git-test--write-file remote-two "main.tex" "remote\n")
+        (git-overleaf-git-test--write-file remote-two "new.tex" "new remote\n")
+        (should (eq (git-overleaf--pull-with-remote-state repo remote-two)
+                    'merged))
+        (should (equal (git-overleaf-git-test--read-file repo "main.tex")
+                       "merged\n"))
+        (should (equal (git-overleaf-git-test--read-file repo "new.tex")
+                       "new remote\n"))
+        (should-not (git-overleaf--pending-state repo))))))
+
+(ert-deftest git-overleaf-git-test-pull-abort-active-and-committed-states ()
+  (let ((git-overleaf-log-echo nil))
+    (git-overleaf-git-test--with-repo repo
+      (git-overleaf-git-test--base-commit repo "base\n")
+      (git-overleaf-git-test--write-file repo "main.tex" "local\n")
+      (let ((local-head (git-overleaf-git-test--commit-all repo "local")))
+        (git-overleaf-git-test--with-temp-dir remote-root
+          (git-overleaf-git-test--write-file remote-root "main.tex" "remote\n")
+          (git-overleaf--fresh-pull repo remote-root))
+        (git-overleaf--abort-pending-pull repo)
+        (should-not (git-overleaf--pending-state repo))
+        (should-not (git-overleaf--merge-in-progress-p repo))
+        (should (equal (git-overleaf--rev-parse repo "HEAD") local-head))))
+    (git-overleaf-git-test--with-repo repo
+      (git-overleaf-git-test--base-commit repo "base\n")
+      (git-overleaf-git-test--write-file repo "main.tex" "local\n")
+      (git-overleaf-git-test--commit-all repo "local")
+      (git-overleaf-git-test--with-temp-dir remote-root
+        (git-overleaf-git-test--write-file remote-root "main.tex" "remote\n")
+        (git-overleaf--fresh-pull repo remote-root))
+      (git-overleaf-git-test--write-file repo "main.tex" "resolved\n")
+      (git-overleaf-git-test--commit-all repo "resolve")
+      (should-error (git-overleaf--abort-pending-pull repo)
+                    :type 'user-error)
+      (should (git-overleaf--pending-state repo)))))
+
+(ert-deftest git-overleaf-git-test-push-uploads-head-and-ignores-worktree ()
+  (let ((git-overleaf-log-echo nil))
+    (git-overleaf-git-test--with-repo repo
+      (git-overleaf-git-test--base-commit repo "base\n")
+      (git-overleaf-git-test--write-file repo "main.tex" "committed\n")
+      (let ((head (git-overleaf-git-test--commit-all repo "local")))
+        (git-overleaf-git-test--write-file repo "main.tex" "dirty\n")
+        (git-overleaf-git-test--write-file repo "untracked.tex" "untracked\n")
+        (git-overleaf-git-test--with-temp-dir remote-root
+          (git-overleaf-git-test--write-file remote-root "main.tex" "base\n")
+          (git-overleaf-git-test--without-remote-side-effects
+            (git-overleaf--fresh-push
+             repo remote-root (git-overleaf-git-test--remote-table))
+            (should (equal (cadr (car sync-calls)) head))))
+        (should (equal (git-overleaf--rev-parse repo "HEAD") head))
+        (should (equal (git-overleaf-git-test--read-file repo "main.tex")
+                       "dirty\n"))
+        (should (file-exists-p (expand-file-name "untracked.tex" repo)))))))
+
+(ert-deftest git-overleaf-git-test-interrupted-push-journal-resumes ()
+  (let ((git-overleaf-log-echo nil))
+    (git-overleaf-git-test--with-repo repo
+      (git-overleaf-git-test--base-commit repo "base\n")
+      (git-overleaf-git-test--write-file repo "main.tex" "target\n")
+      (let ((target (git-overleaf-git-test--commit-all repo "target")))
+        (git-overleaf-git-test--with-temp-dir remote-root
+          (git-overleaf-git-test--write-file remote-root "main.tex" "base\n")
+          (cl-letf (((symbol-function 'git-overleaf--sync-commit)
+                     (lambda (&rest _args) (error "upload interrupted"))))
+            (should-error
+             (git-overleaf--fresh-push
+              repo remote-root (git-overleaf-git-test--remote-table))))
+          (let ((pending (git-overleaf--pending-state repo)))
+            (should (eq (plist-get pending :action) 'push))
+            (should (equal (plist-get pending :target-commit) target)))
+          (git-overleaf-git-test--write-file remote-root "main.tex" "target\n")
+          (git-overleaf-git-test--without-remote-side-effects
+            (git-overleaf--resume-pending-push
+             repo (git-overleaf--pending-state repo) remote-root
+             (git-overleaf-git-test--remote-table)))
+          (should-not (git-overleaf--pending-state repo)))))))
+
+(ert-deftest git-overleaf-git-test-interrupted-push-detects-independent-change ()
+  (let ((git-overleaf-log-echo nil))
+    (git-overleaf-git-test--with-repo repo
+      (let ((base (git-overleaf-git-test--base-commit repo "base\n")))
+        (git-overleaf-git-test--write-file repo "main.tex" "target\n")
+        (let ((target (git-overleaf-git-test--commit-all repo "target")))
+          (git-overleaf--set-pending-push-state repo base target)
+          (git-overleaf-git-test--with-temp-dir remote-root
+            (git-overleaf-git-test--write-file remote-root "main.tex" "external\n")
+            (should-error
+             (git-overleaf--resume-pending-push
+              repo (git-overleaf--pending-state repo) remote-root
+              (git-overleaf-git-test--remote-table))
+             :type 'user-error)
+            (should (git-overleaf--pending-state repo))))))))
+
+(ert-deftest git-overleaf-git-test-pull-reconciles-pending-push ()
+  (let ((git-overleaf-log-echo nil))
+    (git-overleaf-git-test--with-repo repo
+      (let ((base (git-overleaf-git-test--base-commit repo "base\n")))
+        (git-overleaf-git-test--write-file repo "local.tex" "local\n")
+        (let ((target (git-overleaf-git-test--commit-all repo "local")))
+          (git-overleaf--set-pending-push-state repo base target)
+          (git-overleaf-git-test--with-temp-dir remote-root
+            (git-overleaf-git-test--write-file remote-root "main.tex" "base\n")
+            (git-overleaf-git-test--write-file remote-root "remote.tex" "remote\n")
+            (should (eq (git-overleaf--pull-with-remote-state repo remote-root)
+                        'merged))
+            (should-not (git-overleaf--pending-state repo))
+            (should (equal (git-overleaf-git-test--read-file
+                            repo "local.tex")
+                           "local\n"))
+            (should (equal (git-overleaf-git-test--read-file
+                            repo "remote.tex")
+                           "remote\n"))))))))
+
+(ert-deftest git-overleaf-git-test-status-data-is-cached-and-actionable ()
+  (let ((git-overleaf-log-echo nil))
+    (git-overleaf-git-test--with-repo repo
+      (git-overleaf-git-test--base-commit repo "base\n")
+      (let ((status (git-overleaf--status-data repo)))
+        (should (eq (plist-get status :state) 'in-sync))
+        (should-not (plist-get status :worktree))
+        (should (equal (plist-get status :recommendation)
+                       "No synchronization needed")))
+      (git-overleaf-git-test--write-file repo "main.tex" "local\n")
+      (git-overleaf-git-test--commit-all repo "local")
+      (git-overleaf-git-test--write-file repo "untracked.tex" "dirty\n")
+      (let ((status (git-overleaf--status-data repo)))
+        (should (eq (plist-get status :state) 'remote-matches-base))
+        (should (equal (plist-get status :worktree) '(unstaged)))
+        (should (equal (plist-get status :recommendation)
+                       "Run git-overleaf-push"))))))
+
+(ert-deftest git-overleaf-git-test-reset-hard-replaces-tracked-worktree ()
   (let ((git-overleaf-log-echo nil)
         (git-overleaf-local-backups-enabled t))
     (git-overleaf-git-test--with-repo repo
@@ -441,12 +661,13 @@
       (let ((local-head
              (git-overleaf-git-test--commit-all repo "local commit")))
         (git-overleaf-git-test--write-file repo "main.tex" "dirty\n")
-        (git-overleaf-git-test--write-file repo "untracked.tex" "discard\n")
+        (git-overleaf-git-test--write-file repo "untracked.tex" "preserve\n")
         (git-overleaf--set-pending-pull-state repo local-head)
         (git-overleaf-git-test--with-temp-dir remote-root
           (git-overleaf-git-test--write-file remote-root "main.tex" "remote\n")
           (let ((remote-commit
-                 (git-overleaf--overwrite-local-with-remote repo remote-root)))
+                 (git-overleaf--record-remote-snapshot repo remote-root)))
+            (git-overleaf--reset-to-remote repo 'hard)
             (should (equal (git-overleaf--rev-parse repo "HEAD")
                            remote-commit))
             (should (equal (git-overleaf-git-test--read-file
@@ -455,8 +676,9 @@
                            "remote\n"))
             (should-not (file-exists-p
                          (expand-file-name "local-only.tex" repo)))
-            (should-not (file-exists-p
-                         (expand-file-name "untracked.tex" repo)))
+            (should (equal (git-overleaf-git-test--read-file
+                            repo "untracked.tex")
+                           "preserve\n"))
             (should (equal (git-overleaf--rev-parse
                             repo
                             (git-overleaf--base-ref repo))
@@ -475,7 +697,7 @@
               (should (string-match-p (regexp-quote local-head)
                                       backup-commits)))))))))
 
-(ert-deftest git-overleaf-git-test-overwrite-local-preserves-ignored-files ()
+(ert-deftest git-overleaf-git-test-reset-hard-preserves-ignored-files ()
   (let ((git-overleaf-log-echo nil))
     (git-overleaf-git-test--with-repo repo
       (git-overleaf-git-test--base-commit repo "base\n")
@@ -484,11 +706,29 @@
       (git-overleaf-git-test--write-file repo "secret.txt" "preserve\n")
       (git-overleaf-git-test--with-temp-dir remote-root
         (git-overleaf-git-test--write-file remote-root "main.tex" "remote\n")
-        (git-overleaf--overwrite-local-with-remote repo remote-root)
+        (git-overleaf--record-remote-snapshot repo remote-root)
+        (git-overleaf--reset-to-remote repo 'hard)
         (should (equal (git-overleaf-git-test--read-file
                         repo
                         "secret.txt")
                        "preserve\n"))))))
+
+(ert-deftest git-overleaf-git-test-reset-mixed-preserves-worktree-content ()
+  (let ((git-overleaf-log-echo nil))
+    (git-overleaf-git-test--with-repo repo
+      (git-overleaf-git-test--base-commit repo "base\n")
+      (git-overleaf-git-test--write-file repo "main.tex" "local commit\n")
+      (git-overleaf-git-test--commit-all repo "local")
+      (git-overleaf-git-test--write-file repo "main.tex" "working copy\n")
+      (git-overleaf-git-test--with-temp-dir remote-root
+        (git-overleaf-git-test--write-file remote-root "main.tex" "remote\n")
+        (let ((remote (git-overleaf--record-remote-snapshot repo remote-root)))
+          (git-overleaf--reset-to-remote repo 'mixed)
+          (should (equal (git-overleaf--rev-parse repo "HEAD") remote))
+          (should (equal (git-overleaf-git-test--read-file repo "main.tex")
+                         "working copy\n"))
+          (should (git-overleaf--repo-status-unstaged
+                   (git-overleaf--read-repo-status repo))))))))
 
 (ert-deftest git-overleaf-git-test-working-tree-error-branches ()
   (let ((git-overleaf-log-echo nil))
@@ -496,22 +736,6 @@
       (git-overleaf-git-test--write-file repo "base.tex" "base\n")
       (git-overleaf-git-test--commit-all repo "base")
       (should-error (git-overleaf--require-managed-repo repo)
-                    :type 'user-error))
-    (git-overleaf-git-test--with-repo repo
-      (git-overleaf-git-test--base-commit repo "base\n")
-      (git-overleaf-git-test--write-file repo "dirty.tex" "dirty\n")
-      (should-error (git-overleaf--ensure-clean-working-tree
-                     repo
-                     "testing")
-                    :type 'user-error)
-      (should-error (git-overleaf--prepare-working-tree-for-sync
-                     repo
-                     'error)
-                    :type 'user-error)
-      (git-overleaf-git-test--git repo "add" "dirty.tex")
-      (should-error (git-overleaf--ensure-clean-working-tree
-                     repo
-                     "testing")
                     :type 'user-error))
     (git-overleaf-git-test--with-repo repo
       (git-overleaf-git-test--base-commit repo "base\n")

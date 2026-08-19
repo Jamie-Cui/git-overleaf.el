@@ -12,12 +12,14 @@
 (ert-deftest git-overleaf-magit-test-state-labels ()
   (let ((state (git-overleaf-magit--make-remote-state)))
     (cl-letf (((symbol-function 'git-overleaf--pending-state)
-               (lambda (_repo) '(:action pull))))
+               (lambda (_repo) '(:action pull)))
+              ((symbol-function 'git-overleaf--pending-phase)
+               (lambda (&rest _args) 'merging)))
       (should
        (equal
         (git-overleaf-magit--state-label
          "/repo" t 'in-sync nil state)
-        '("pending pull" . error))))
+        '("pending pull (merging)" . error))))
     (cl-letf (((symbol-function 'git-overleaf--pending-state)
                (lambda (_repo) nil)))
       (should
@@ -98,10 +100,12 @@
   (cl-letf (((symbol-function 'git-overleaf-magit--require-managed-repo)
              (lambda () "/repo"))
             ((symbol-function 'git-overleaf--remote-name)
-             (lambda (_repo) nil)))
+             (lambda (_repo) nil))
+            ((symbol-function 'git-overleaf--project-name)
+             (lambda (_repo) "Project")))
     (should
      (equal (git-overleaf-magit--operation-description "fetch")
-            "Register Overleaf remote and fetch")))
+            "Overleaf: Project")))
   (cl-letf (((symbol-function 'git-overleaf-magit--require-managed-repo)
              (lambda () (user-error "not managed"))))
     (should
@@ -124,8 +128,8 @@
 
 (ert-deftest git-overleaf-magit-test-fetch-mode ()
   (should (eq (git-overleaf-magit--fetch-mode nil) 'normal))
-  (should (eq (git-overleaf-magit--fetch-mode '("-f")) 'force))
-  (should (eq (git-overleaf-magit--fetch-mode '("--force")) 'force))
+  (should (eq (git-overleaf-magit--fetch-mode '("-f")) 'normal))
+  (should (eq (git-overleaf-magit--fetch-mode '("--force")) 'normal))
   (should-error
    (git-overleaf-magit--fetch-mode '("--prune"))
    :type 'user-error)
@@ -134,104 +138,25 @@
    :type 'user-error))
 
 (ert-deftest git-overleaf-magit-test-push-dispatches-force-modes ()
-  (let (commands)
+  (let (calls)
     (cl-letf (((symbol-function 'git-overleaf-magit--require-managed-repo)
                (lambda () "/repo"))
-              ((symbol-function
-                'git-overleaf-magit--ensure-registered-remote)
-               (lambda (_repo _operation) "overleaf"))
               ((symbol-function 'git-overleaf--async-supported-p)
                (lambda () t))
               ((symbol-function 'call-interactively)
                (lambda (command &rest _args)
-                 (push command commands))))
+                 (push (list command (and current-prefix-arg t)) calls))))
       (git-overleaf-magit-push nil)
       (git-overleaf-magit-push '("--force-with-lease"))
       (git-overleaf-magit-push '("-f"))
       (git-overleaf-magit-push '("--force"))
       (should
        (equal
-        (nreverse commands)
-        '(git-overleaf-push
-          git-overleaf-push
-          git-overleaf-overwrite-remote
-          git-overleaf-overwrite-remote))))))
-
-(ert-deftest git-overleaf-magit-test-ensure-remote-reuses-existing ()
-  (cl-letf (((symbol-function 'git-overleaf--remote-name)
-             (lambda (_repo) "paper"))
-            ((symbol-function 'y-or-n-p)
-             (lambda (&rest _args)
-               (ert-fail "Existing remote prompted for registration")))
-            ((symbol-function 'git-overleaf-register-remote)
-             (lambda (&rest _args)
-               (ert-fail "Existing remote was registered again"))))
-    (should
-     (equal
-      (git-overleaf-magit--ensure-registered-remote "/repo" "fetch")
-      "paper"))))
-
-(ert-deftest git-overleaf-magit-test-ensure-remote-registers-default ()
-  (let (prompt registration)
-    (cl-letf (((symbol-function 'git-overleaf--remote-name)
-               (lambda (_repo) nil))
-              ((symbol-function 'y-or-n-p)
-               (lambda (question)
-                 (setq prompt question)
-                 t))
-              ((symbol-function 'git-overleaf--git-remotes)
-               (lambda (_repo) '("origin")))
-              ((symbol-function 'git-overleaf-register-remote)
-               (lambda (repo name)
-                 (setq registration (list repo name))
-                 name)))
-      (should
-       (equal
-        (git-overleaf-magit--ensure-registered-remote "/repo" "fetch")
-        "overleaf"))
-      (should (string-match-p "register `overleaf'" prompt))
-      (should (string-match-p "continue with fetch" prompt))
-      (should (equal registration '("/repo" "overleaf"))))))
-
-(ert-deftest git-overleaf-magit-test-ensure-remote-asks-after-collision ()
-  (let (name-prompt initial registration)
-    (cl-letf (((symbol-function 'git-overleaf--remote-name)
-               (lambda (_repo) nil))
-              ((symbol-function 'y-or-n-p)
-               (lambda (_question) t))
-              ((symbol-function 'git-overleaf--git-remotes)
-               (lambda (_repo) '("origin" "overleaf")))
-              ((symbol-function 'read-string)
-               (lambda (prompt default)
-                 (setq name-prompt prompt
-                       initial default)
-                 "overleaf-project"))
-              ((symbol-function 'git-overleaf-register-remote)
-               (lambda (repo name)
-                 (setq registration (list repo name))
-                 name)))
-      (should
-       (equal
-        (git-overleaf-magit--ensure-registered-remote "/repo" "pull")
-        "overleaf-project"))
-      (should (string-match-p "already exists" name-prompt))
-      (should (equal initial "overleaf-project"))
-      (should (equal registration '("/repo" "overleaf-project"))))))
-
-(ert-deftest git-overleaf-magit-test-ensure-remote-cancel-is-read-only ()
-  (cl-letf (((symbol-function 'git-overleaf--remote-name)
-             (lambda (_repo) nil))
-            ((symbol-function 'y-or-n-p)
-             (lambda (_question) nil))
-            ((symbol-function 'git-overleaf--git-remotes)
-             (lambda (_repo)
-               (ert-fail "Cancellation inspected remote names")))
-            ((symbol-function 'git-overleaf-register-remote)
-             (lambda (&rest _args)
-               (ert-fail "Cancellation registered a remote"))))
-    (should-error
-     (git-overleaf-magit--ensure-registered-remote "/repo" "push")
-     :type 'user-error)))
+        (nreverse calls)
+        '((git-overleaf-push nil)
+          (git-overleaf-push nil)
+          (git-overleaf-push t)
+          (git-overleaf-push t)))))))
 
 (ert-deftest git-overleaf-magit-test-diff-kinds ()
   (should-not (git-overleaf-magit--diff-kinds t nil))
@@ -278,8 +203,6 @@
                  (lambda () "/repo"))
                 ((symbol-function 'git-overleaf--managed-repo-p)
                  (lambda (_repo) t))
-                ((symbol-function 'git-overleaf-magit--registered-remote-p)
-                 (lambda (_repo) t))
                 ((symbol-function 'git-overleaf--repo-async-key)
                  (lambda (_repo) "repo:/repo"))
                 ((symbol-function 'git-overleaf--async-key-active-p)
@@ -299,8 +222,6 @@
                  (lambda () "/repo"))
                 ((symbol-function 'git-overleaf--managed-repo-p)
                  (lambda (_repo) t))
-                ((symbol-function 'git-overleaf-magit--registered-remote-p)
-                 (lambda (_repo) t))
                 ((symbol-function 'git-overleaf--repo-async-key)
                  (lambda (_repo) "repo:/repo"))
                 ((symbol-function 'git-overleaf--async-key-active-p)
@@ -318,7 +239,7 @@
         (git-overleaf-magit--maybe-auto-refresh-remote)
         (should-not called)))))
 
-(ert-deftest git-overleaf-magit-test-auto-refresh-does-not-register-remote ()
+(ert-deftest git-overleaf-magit-test-auto-refresh-needs-no-logical-remote ()
   (with-temp-buffer
     (let ((git-overleaf-magit-auto-refresh-remote t)
           (refreshed nil))
@@ -330,8 +251,6 @@
                  (lambda () "/repo"))
                 ((symbol-function 'git-overleaf--managed-repo-p)
                  (lambda (_repo) t))
-                ((symbol-function 'git-overleaf-magit--registered-remote-p)
-                 (lambda (_repo) nil))
                 ((symbol-function 'git-overleaf--repo-async-key)
                  (lambda (_repo) "repo:/repo"))
                 ((symbol-function 'git-overleaf-register-remote)
@@ -341,7 +260,7 @@
                  (lambda (&optional _background)
                    (setq refreshed t))))
         (git-overleaf-magit--maybe-auto-refresh-remote)
-        (should-not refreshed)))))
+        (should refreshed)))))
 
 (ert-deftest git-overleaf-magit-test-remote-refresh-success ()
   (let ((buffer (generate-new-buffer " *overleaf-magit-test*"))
@@ -400,8 +319,7 @@
 
 (ert-deftest git-overleaf-magit-test-fetch-routing ()
   (let ((ordinary nil)
-        (overleaf nil)
-        (commands nil))
+        (overleaf nil))
     (cl-letf (((symbol-function 'magit-toplevel)
                (lambda () "/repo"))
               ((symbol-function 'git-overleaf--managed-repo-p)
@@ -412,10 +330,7 @@
                (lambda (&optional background)
                  (setq overleaf background)))
               ((symbol-function 'git-overleaf--async-supported-p)
-               (lambda () t))
-              ((symbol-function 'call-interactively)
-               (lambda (command &rest _args)
-                 (push command commands))))
+               (lambda () t)))
       (git-overleaf-magit--around-git-fetch
        (lambda (remote args) (setq ordinary (list remote args)))
        "overleaf"
@@ -433,7 +348,7 @@
        (lambda (&rest _args) (ert-fail "ordinary fetch was called"))
        "overleaf"
        '("--force"))
-      (should (equal commands '(git-overleaf-overwrite-local)))
+      (should overleaf)
       (should-error
        (git-overleaf-magit--around-git-fetch
         (lambda (&rest _args) (ert-fail "ordinary fetch was called"))
@@ -441,31 +356,22 @@
         '("main"))
        :type 'user-error))))
 
-(ert-deftest git-overleaf-magit-test-explicit-fetch-registers-before-dispatch ()
+(ert-deftest git-overleaf-magit-test-explicit-fetch-needs-no-registration ()
   (let (calls)
     (cl-letf (((symbol-function 'git-overleaf-magit--require-managed-repo)
                (lambda () "/repo"))
-              ((symbol-function
-                'git-overleaf-magit--ensure-registered-remote)
-               (lambda (repo operation)
-                 (push (list 'ensure repo operation) calls)))
               ((symbol-function 'git-overleaf-magit-refresh-remote)
                (lambda (&optional background)
                  (push (list 'refresh background) calls)))
-              ((symbol-function 'git-overleaf--async-supported-p)
-               (lambda () t))
-              ((symbol-function 'call-interactively)
-               (lambda (command &rest _args)
-                 (push (list 'command command) calls))))
+              ((symbol-function 'git-overleaf-register-remote)
+               (lambda (&rest _args)
+                 (ert-fail "Fetch registered a logical remote"))))
       (git-overleaf-magit-fetch nil)
       (git-overleaf-magit-fetch '("--force"))
       (should
        (equal
         (nreverse calls)
-        '((ensure "/repo" "fetch")
-          (refresh t)
-          (ensure "/repo" "fetch")
-          (command git-overleaf-overwrite-local)))))))
+        '((refresh t) (refresh t)))))))
 
 (ert-deftest git-overleaf-magit-test-operation-succeeded-refreshes-status ()
   (let ((buffer (generate-new-buffer " *overleaf-status-test*"))
@@ -500,8 +406,11 @@
    (eq (lookup-key git-overleaf-magit-command-map (kbd "p"))
        #'git-overleaf-push))
   (should
-   (eq (lookup-key git-overleaf-magit-command-map (kbd "F"))
-       #'git-overleaf-overwrite-local))
+   (eq (lookup-key git-overleaf-magit-command-map (kbd "R"))
+       #'git-overleaf-reset))
+  (should
+   (eq (lookup-key git-overleaf-magit-command-map (kbd "q"))
+       #'git-overleaf-pull-abort))
   (should
    (keymapp
     (lookup-key git-overleaf-magit-section-map (kbd "C-c C-c")))))

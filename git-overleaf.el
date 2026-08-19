@@ -6,7 +6,7 @@
 ;; Created: April 14, 2026
 ;; URL: https://github.com/Jamie-Cui/git-overleaf
 ;; Package-Requires: ((emacs "29.4") (websocket "1.15") (webdriver "0.1") (magit-section "4.5") (transient "0.7.2"))
-;; Version: 2.0.0
+;; Version: 3.0.0
 ;; Keywords: hypermedia, tex, tools
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; This file is not part of GNU Emacs.
@@ -31,8 +31,8 @@
 (require 'git-overleaf-http)
 (require 'git-overleaf-sync)
 
-(declare-function git-overleaf--overwrite-local-with-remote
-                  "git-overleaf-sync" (repo remote-root))
+(declare-function git-overleaf--ensure-no-active-merge
+                  "git-overleaf-sync" (repo action))
 
 ;;;; Command helpers
 
@@ -120,6 +120,7 @@ background before calling CONTINUATION."
           '("commit" "-m" "chore: import project from Overleaf")))
         (git-overleaf--set-base-ref repo "HEAD")
         (git-overleaf--set-remote-ref repo "HEAD")
+        (git-overleaf--record-remote-fetch-time repo)
         (git-overleaf--message
          "Cloned `%s' into %s"
          (plist-get project :name)
@@ -242,45 +243,16 @@ When CONFIRM is non-nil, ask before rebinding an existing project."
               (git-overleaf--init-selected-project repo project))
             :key (git-overleaf--repo-async-key repo)))))))))
 
-(defun git-overleaf--push-unstaged-action (repo noerror)
-  "Return the unstaged-change action for pushing REPO.
-When NOERROR is non-nil, do not prompt."
-  (let ((status (git-overleaf--read-repo-status repo)))
-    (when (git-overleaf--repo-status-unmerged status)
-      (user-error
-       "Repository %s has unresolved merge conflicts; resolve them before pushing"
-       repo))
-    (if (git-overleaf--repo-status-unstaged status)
-        (progn
-          (when noerror
-            (user-error
-             "Overleaf push requires a clean working tree; stage all changes or stash them first"))
-          (unless
-              (y-or-n-p
-               (format
-                "Repository %s has unstaged changes.  Stage all changes and continue with Overleaf push? "
-                repo))
-            (user-error
-             "Overleaf push requires a clean working tree; stage all changes or stash them first"))
-          'stage)
-      'error)))
-
-(defun git-overleaf--push-async (repo noerror)
+(defun git-overleaf--push-async (repo force noerror)
   "Start an asynchronous push for REPO.
+When FORCE is non-nil, replace divergent remote content with HEAD.
 When NOERROR is non-nil, demote setup and background errors to warnings."
   (git-overleaf--with-repo-log-context repo
 	                                   (condition-case err
-		                                   (let* ((pending nil)
-			                                      (unstaged-action nil)
-			                                      (name nil))
+		                                   (let ((name nil))
 		                                     (git-overleaf--set-repo-url repo)
-		                                     (setq pending (git-overleaf--pending-state repo))
-		                                     (if pending
-			                                     (git-overleaf--ensure-clean-working-tree
-			                                      repo
-			                                      "finishing the pending Overleaf operation")
-			                                   (setq unstaged-action
-				                                     (git-overleaf--push-unstaged-action repo noerror)))
+		                                     (git-overleaf--ensure-no-active-merge
+		                                      repo "pushing to Overleaf")
 		                                     (setq name (format "Overleaf push `%s'"
 							                                    (git-overleaf--project-name repo)))
 		                                     (cl-labels
@@ -288,7 +260,7 @@ When NOERROR is non-nil, demote setup and background errors to warnings."
 				                                    (git-overleaf--async-start
 				                                     name
 				                                     (lambda ()
-					                                   (git-overleaf--push-sync repo unstaged-action t))
+					                                   (git-overleaf--push-sync repo force t))
 				                                     :key (git-overleaf--repo-async-key repo)
 				                                     :on-success
 				                                     (lambda (_value)
@@ -316,57 +288,20 @@ When NOERROR is non-nil, demote setup and background errors to warnings."
 	                                                             repo (error-message-string err))
 	                                       (signal (car err) (cdr err)))))))
 
-(defun git-overleaf--confirm-overwrite-remote (repo)
-  "Ask for confirmation before overwriting REPO's Overleaf project."
-  (let ((pending (git-overleaf--overwrite-pending-state repo)))
-    (unless
-        (yes-or-no-p
-         (if pending
-             (format
-              "Abandon pending Overleaf %s and overwrite project `%s' with local HEAD?"
-              (plist-get pending :action)
-              (git-overleaf--project-name repo))
-           (format
-            "Overwrite Overleaf project `%s' with local HEAD?"
-            (git-overleaf--project-name repo))))
-      (user-error "Aborted"))))
-
-(defun git-overleaf--overwrite-remote-async (repo)
-  "Start an asynchronous remote overwrite for REPO."
-  (git-overleaf--with-repo-log-context repo
-	                                   (git-overleaf--set-repo-url repo)
-	                                   (git-overleaf--confirm-overwrite-remote repo)
-	                                   (let ((unstaged-action
-	                                          (git-overleaf--push-unstaged-action repo nil)))
-	                                     (git-overleaf--ensure-authenticated-async
-	                                      "overwriting the Overleaf remote"
-	                                      (lambda ()
-			                                    (git-overleaf--async-start
-			                                     (format "Overleaf remote overwrite `%s'"
-				                                     (git-overleaf--project-name repo))
-			                                     (lambda ()
-				                                   (git-overleaf--overwrite-remote-sync repo unstaged-action t))
-	                                     :key (git-overleaf--repo-async-key repo)
-	                                     :on-success
-	                                     (lambda (_value)
-	                                       (git-overleaf--notify-operation-succeeded
-	                                        repo 'overwrite)
-	                                       (git-overleaf--message
-	                                        "Finished Overleaf remote overwrite `%s'"
-	                                        (git-overleaf--project-name repo)))))))))
+(defun git-overleaf--confirm-force-push (repo)
+  "Ask for confirmation before force-pushing REPO's HEAD to Overleaf."
+  (unless
+      (yes-or-no-p
+       (format
+        "Force-push local HEAD to Overleaf project `%s', replacing divergent remote content? "
+        (git-overleaf--project-name repo)))
+    (user-error "Aborted")))
 
 (defun git-overleaf--pull-async (repo)
   "Start an asynchronous pull for REPO."
   (git-overleaf--with-repo-log-context repo
 	                                   (git-overleaf--set-repo-url repo)
-	                                   (let ((pending (git-overleaf--pending-state repo)))
-	                                     (when pending
-	                                       (pcase (plist-get pending :action)
-	                                         ('pull
-	                                          (git-overleaf--signal-pending-pull repo))
-	                                         (action
-	                                          (user-error "Unsupported pending Overleaf action `%s'" action))))
-	                                     (git-overleaf--ensure-clean-working-tree repo "pulling from Overleaf"))
+	                                   (git-overleaf--ensure-pull-startable repo)
 	                                   (git-overleaf--ensure-authenticated-async
 	                                    "pulling from Overleaf"
 	                                    (lambda ()
@@ -419,45 +354,6 @@ assume the caller already checked authentication."
            "Finished Overleaf fetch `%s'"
            (git-overleaf--project-name repo))))))))
 
-(defun git-overleaf--confirm-overwrite-local (repo)
-  "Ask for confirmation before overwriting local REPO from Overleaf."
-  (let ((pending (git-overleaf--overwrite-pending-state repo)))
-    (unless
-        (yes-or-no-p
-         (concat
-          (if pending
-              (format
-               "Abandon pending Overleaf %s and overwrite the local branch from project `%s'? "
-               (plist-get pending :action)
-               (git-overleaf--project-name repo))
-            (format
-             "Overwrite the local branch from Overleaf project `%s'? "
-             (git-overleaf--project-name repo)))
-          "This discards staged, unstaged, and untracked changes. "))
-      (user-error "Aborted"))))
-
-(defun git-overleaf--overwrite-local-async (repo)
-  "Start an asynchronous local overwrite for REPO."
-  (git-overleaf--with-repo-log-context repo
-    (git-overleaf--set-repo-url repo)
-    (git-overleaf--confirm-overwrite-local repo)
-    (git-overleaf--overwrite-pending-state repo)
-    (git-overleaf--current-branch repo)
-    (git-overleaf--ensure-authenticated-async
-     "overwriting the local branch from Overleaf"
-     (lambda ()
-       (git-overleaf--async-start
-        (format "Overleaf local overwrite `%s'"
-                (git-overleaf--project-name repo))
-        (lambda () (git-overleaf--overwrite-local-sync repo t))
-        :key (git-overleaf--repo-async-key repo)
-        :on-success
-        (lambda (_commit)
-          (git-overleaf--notify-operation-succeeded repo 'overwrite-local)
-          (git-overleaf--message
-           "Finished Overleaf local overwrite `%s'"
-           (git-overleaf--project-name repo))))))))
-
 ;;;; Interactive commands
 
 ;;;###autoload
@@ -497,44 +393,70 @@ and the last-synchronized base ref are left unchanged."
         (git-overleaf--notify-operation-succeeded repo 'fetch)))))
 
 ;;;###autoload
-(defun git-overleaf-overwrite-local (&optional directory)
-  "Overwrite the current local branch with the latest Overleaf snapshot.
-
-Optional DIRECTORY is the repository root.  Unlike
-`git-overleaf-fetch', this command moves the current branch and replaces
-the index and working tree with Overleaf content.  Staged, unstaged, and
-untracked changes are discarded; ignored files are preserved.
-
-Before changing local state, create a safety ref for the previous HEAD
-when `git-overleaf-local-backups-enabled' is non-nil.  A successful
-overwrite updates the synchronization base and remote refs and abandons
-any pending Overleaf pull.  Detached HEAD is not supported."
+(defun git-overleaf-status (&optional directory)
+  "Show cached synchronization status for the Overleaf repo at DIRECTORY.
+This command does not access the network.  Return the same status as a
+plist so Lisp callers can inspect it without parsing display text."
   (interactive)
   (let* ((repo (git-overleaf--require-managed-repo directory))
-         (interactive-p (called-interactively-p 'interactive)))
-    (if (and interactive-p (git-overleaf--async-enabled-p))
-        (git-overleaf--overwrite-local-async repo)
-      (when interactive-p
-        (git-overleaf--confirm-overwrite-local repo))
-      (prog1 (git-overleaf--overwrite-local-sync repo nil)
-        (git-overleaf--notify-operation-succeeded repo 'overwrite-local)))))
+         (data (git-overleaf--status-data repo)))
+    (when (called-interactively-p 'interactive)
+      (with-output-to-temp-buffer "*Git Overleaf Status*"
+        (princ (format "Project:    %s\n" (plist-get data :project)))
+        (princ (format "Repository: %s\n" (plist-get data :repo)))
+        (princ (format "Branch:     %s\n" (plist-get data :branch)))
+        (princ (format "State:      %s\n" (plist-get data :state)))
+        (let ((worktree (plist-get data :worktree)))
+          (princ
+           (format "Worktree:   %s\n"
+                   (if worktree
+                       (mapconcat #'symbol-name worktree ", ")
+                     "clean"))))
+        (princ
+         (format "Pending:    %s\n"
+                 (or (plist-get data :pending-phase) "none")))
+        (princ
+         (format "Fetched:    %s\n"
+                 (or (plist-get data :remote-fetched-at) "unknown")))
+        (princ
+         (format "Next:       %s\n"
+                 (plist-get data :recommendation)))))
+    data))
 
-(defun git-overleaf--overwrite-local-sync (repo &optional skip-auth)
-  "Synchronously overwrite local REPO from Overleaf.
-When SKIP-AUTH is non-nil, assume the caller already checked
-authentication."
-  (git-overleaf--with-repo-log-context repo
-    (git-overleaf--set-repo-url repo)
-    (git-overleaf--prepare-sync-metadata-repo repo)
-    (git-overleaf--overwrite-pending-state repo)
-    (git-overleaf--current-branch repo)
-    (unless skip-auth
-      (git-overleaf--ensure-authenticated
-       "overwriting the local branch from Overleaf"))
-    (git-overleaf--with-downloaded-snapshot
-     (git-overleaf--project-id repo)
-     (lambda (remote-root)
-       (git-overleaf--overwrite-local-with-remote repo remote-root)))))
+;;;###autoload
+(defun git-overleaf-reset (&optional directory mode)
+  "Reset the local branch to the cached Overleaf snapshot.
+MODE defaults to `mixed', moving HEAD and resetting the index while
+preserving working-tree files.  With a prefix argument interactively,
+use `hard', also resetting tracked working-tree files.  Neither mode
+deletes untracked or ignored files.  Run `git-overleaf-fetch' first when
+you need a fresh remote snapshot."
+  (interactive (list nil (if current-prefix-arg 'hard 'mixed)))
+  (let* ((repo (git-overleaf--require-managed-repo directory))
+         (mode (or mode 'mixed)))
+    (when (called-interactively-p 'interactive)
+      (unless
+          (yes-or-no-p
+           (if (eq mode 'hard)
+               (format
+                "Reset `%s' --hard to the cached Overleaf snapshot? Tracked local changes will be discarded. "
+                (git-overleaf--current-branch repo))
+             (format
+              "Reset `%s' to the cached Overleaf snapshot, preserving working-tree files? "
+              (git-overleaf--current-branch repo))))
+        (user-error "Aborted")))
+    (prog1 (git-overleaf--reset-to-remote repo mode)
+      (git-overleaf--notify-operation-succeeded repo 'reset))))
+
+;;;###autoload
+(defun git-overleaf-pull-abort (&optional directory)
+  "Abort an active pending Overleaf pull in DIRECTORY.
+If the Git merge was already aborted manually, clear only stale pending
+metadata.  Refuse to rewrite history after the merge has been committed."
+  (interactive)
+  (let ((repo (git-overleaf--require-managed-repo directory)))
+    (prog1 (git-overleaf--abort-pending-pull repo)
+      (git-overleaf--notify-operation-succeeded repo 'pull-abort))))
 
 ;;;###autoload
 (defun git-overleaf-clone (&optional url target-directory)
@@ -560,16 +482,16 @@ snapshot used by later `git-overleaf-push' and
       (git-overleaf--init-sync directory url interactive-p))))
 
 ;;;###autoload
-(defun git-overleaf-push (&optional directory noerror)
-  "Push the current Git repo to its configured Overleaf project.
-Staged changes are committed automatically before the remote snapshot is
-fetched.  When unstaged changes exist, prompt whether to stage them
-first.
+(defun git-overleaf-push (&optional directory force noerror)
+  "Push HEAD of the current Git repo to its configured Overleaf project.
+The index and working tree are ignored: this command uploads committed
+content only and never stages or commits files.
 
-If a pending pull exists (merge conflict from a previous pull), verifies
-the merge is complete and uploads the merged result.  If the remote has
-diverged and no pending pull exists, signals an error asking you to run
-`git-overleaf-pull' first.
+With FORCE non-nil, replace divergent Overleaf content with HEAD after
+interactive confirmation.  A normal push refuses remote divergence.
+Interrupted uploads are journaled; another normal push safely resumes
+them when the remote contains only a partial application of the same
+target, while pull reconciles independent remote changes.
 
 Existing remote Overleaf text docs are updated through Overleaf's
 real-time text OT path when possible, preserving document ids and web
@@ -578,8 +500,10 @@ history.  Non-doc files still use Overleaf upload/delete APIs.
 When NOERROR is non-nil, silently return nil if DIRECTORY is not a
 managed Overleaf repo, and demote push errors to warnings.  This is
 useful for hooks such as `git-commit-post-finish-hook'."
-  (interactive)
-  (let* ((repo (or (and directory (git-overleaf-root directory))
+  (interactive (list nil current-prefix-arg nil))
+  (let* ((force (and force t))
+         (interactive-p (called-interactively-p 'interactive))
+         (repo (or (and directory (git-overleaf-root directory))
                    (git-overleaf-root default-directory))))
     (cond
      ((not (and repo (git-overleaf--managed-repo-p repo)))
@@ -591,129 +515,62 @@ useful for hooks such as `git-commit-post-finish-hook'."
                (git-overleaf--async-enabled-p))
           (and noerror
                (git-overleaf--async-enabled-p)))
-      (git-overleaf--push-async repo noerror))
+      (when (and interactive-p force)
+        (git-overleaf--confirm-force-push repo))
+      (git-overleaf--push-async repo force noerror))
      (noerror
      (git-overleaf--with-repo-log-context repo
 		                                   (condition-case err
 			                                   (prog1
-			                                       (git-overleaf--push-sync repo)
+			                                       (git-overleaf--push-sync repo force)
 			                                     (git-overleaf--notify-operation-succeeded
 			                                      repo 'push))
 		                                     (error
 		                                      (git-overleaf--warn "Automatic Overleaf push failed for %s: %s"
-								                                  repo (error-message-string err))))))
+							                                  repo (error-message-string err))))))
      (t
-      (prog1 (git-overleaf--push-sync repo)
+      (when (and interactive-p force)
+        (git-overleaf--confirm-force-push repo))
+      (prog1 (git-overleaf--push-sync repo force)
         (git-overleaf--notify-operation-succeeded repo 'push))))))
 
-(defun git-overleaf--push-sync (repo &optional unstaged-action skip-auth)
+(defun git-overleaf--push-sync (repo &optional force skip-auth)
   "Internal: perform the actual push for managed REPO.
-UNSTAGED-ACTION is passed to
-`git-overleaf--prepare-working-tree-for-sync'.  When SKIP-AUTH is
-non-nil, assume the caller already checked authentication."
+When FORCE is non-nil, replace divergent remote content.  When
+SKIP-AUTH is non-nil, assume the caller already checked authentication."
   (git-overleaf--with-repo-log-context repo
-	                                   (let ((pending nil)
-		                                     (project-id nil))
+	                                   (let ((project-id nil))
 	                                     (git-overleaf--set-repo-url repo)
 	                                     (git-overleaf--prepare-sync-metadata-repo repo)
-	                                     (setq pending (git-overleaf--pending-state repo))
+	                                     (git-overleaf--ensure-no-active-merge
+	                                      repo "pushing to Overleaf")
 	                                     (unless skip-auth
 		                                   (git-overleaf--ensure-authenticated "pushing to Overleaf"))
-	                                     (if pending
-		                                     (git-overleaf--ensure-clean-working-tree repo "finishing the pending Overleaf operation")
-		                                   (git-overleaf--prepare-working-tree-for-sync repo unstaged-action))
 	                                     (setq project-id (git-overleaf--project-id repo))
 	                                     (git-overleaf--with-remote-state
 	                                      project-id
 	                                      (lambda (remote-root remote-table)
-		                                    (pcase (and pending (plist-get pending :action))
-		                                      ('pull
-			                                   (git-overleaf--finalize-pending-pull
-			                                    repo pending remote-root remote-table))
-		                                      (_
-			                                   (when pending
-			                                     (user-error "Unknown pending Overleaf action `%s'"
-						                                     (plist-get pending :action)))
-			                                   (git-overleaf--fresh-push repo remote-root remote-table))))))))
-
-;;;###autoload
-(defun git-overleaf-overwrite-remote (&optional directory)
-  "Overwrite the configured Overleaf project with the current Git repo.
-
-Optional DIRECTORY is the repository root.  Like `git-overleaf-push',
-staged changes are committed automatically before upload.  Unlike
-`git-overleaf-push', remote Overleaf changes are replaced by the
-local \"HEAD\" snapshot.  Existing remote Overleaf text docs are
-updated through text OT when possible, preserving document ids and
-web history.
-
-A successful overwrite abandons and clears any pending Overleaf pull.
-Actual unresolved Git conflicts must first be resolved or the merge
-aborted."
-  (interactive)
-  (let* ((repo (git-overleaf--require-managed-repo directory))
-         (interactive-p (called-interactively-p 'interactive)))
-    (if (and interactive-p (git-overleaf--async-enabled-p))
-        (git-overleaf--overwrite-remote-async repo)
-      (when interactive-p
-        (git-overleaf--confirm-overwrite-remote repo))
-      (prog1 (git-overleaf--overwrite-remote-sync repo nil nil)
-        (git-overleaf--notify-operation-succeeded repo 'overwrite)))))
-
-;;;###autoload
-(define-obsolete-function-alias
-  'git-overleaf-push-force
-  #'git-overleaf-overwrite-remote
-  "2.0.0")
-
-(defun git-overleaf--overwrite-remote-sync
-    (repo &optional unstaged-action skip-auth)
-  "Synchronously overwrite Overleaf with REPO.
-UNSTAGED-ACTION is passed to
-`git-overleaf--prepare-working-tree-for-sync'.  When SKIP-AUTH is
-non-nil, assume the caller already checked authentication."
-  (git-overleaf--with-repo-log-context repo
-	                                   (let ((project-id nil)
-	                                         (context nil))
-	                                     (git-overleaf--overwrite-pending-state repo)
-	                                     (git-overleaf--set-repo-url repo)
-	                                     (git-overleaf--prepare-sync-metadata-repo repo)
-	                                     (setq project-id (git-overleaf--project-id repo))
-	                                     (unless skip-auth
-		                                   (git-overleaf--ensure-authenticated "overwriting the Overleaf remote"))
-	                                     (git-overleaf--prepare-working-tree-for-sync repo unstaged-action)
-	                                     (git-overleaf--with-remote-state
-	                                      project-id
-	                                      (lambda (remote-root remote-table)
-		                                    (setq context (git-overleaf--read-sync-state repo remote-root))
-	                                    (prog1
-	                                        (if (memq (plist-get context :status) '(in-sync head-matches-remote))
-	                                            (git-overleaf--note-matching-sync-state
-	                                             repo
-	                                             (plist-get context :head)
-	                                             project-id
-	                                             remote-table)
-	                                          (git-overleaf--upload-head-and-set-base
-	                                           repo
-	                                           (plist-get context :head)
-	                                           project-id
-	                                           remote-root
-	                                           remote-table
-	                                           "Overwrote Overleaf project `%s' with local HEAD"
-	                                           (git-overleaf--project-name repo)))
-	                                      (git-overleaf--clear-pending-state repo)))))))
+		                                    (git-overleaf--push-with-remote-state
+		                                     repo remote-root remote-table force))))))
 
 ;;;###autoload
 (defun git-overleaf-pull (&optional directory)
   "Pull the latest Overleaf snapshot into the current Git repo at DIRECTORY.
-The working tree must be clean before pulling.
+Like `git pull', this command preserves staged, unstaged, and untracked
+changes when Git can merge without overwriting them.  If local changes
+overlap incoming changes, Git rejects the merge and leaves them intact.
 
 When the local branch has diverged from the remote, performs a
 `git merge --no-ff --no-edit' directly on the current branch.  If the
 merge succeeds, records the downloaded remote snapshot as the base so a
 later `git-overleaf-push' uploads the merged result.  If there are
 conflicts, records a pending-pull state and prompts you to resolve them,
-commit, then run `git-overleaf-push' to complete the sync."
+commit, then run `git-overleaf-push' to complete the sync.
+
+If Overleaf changes again after a conflicted merge was committed, run
+this command again: it integrates the newer snapshot instead of trapping
+the repository in pending state.  It also reconciles a partially failed
+push with independent remote changes."
   (interactive)
   (let* ((repo (git-overleaf--require-managed-repo directory)))
     (if (and (called-interactively-p 'interactive)
@@ -727,22 +584,17 @@ commit, then run `git-overleaf-push' to complete the sync."
 When SKIP-AUTH is non-nil, assume the caller already checked
 authentication."
   (git-overleaf--with-repo-log-context repo
-	                                   (let ((pending (git-overleaf--pending-state repo)))
-	                                     (git-overleaf--set-repo-url repo)
-	                                     (git-overleaf--prepare-sync-metadata-repo repo)
-	                                     (when pending
-	                                       (pcase (plist-get pending :action)
-	                                         ('pull
-	                                          (git-overleaf--signal-pending-pull repo))
-	                                         (action
-		                                      (user-error "Unsupported pending Overleaf action `%s'" action))))
-	                                     (git-overleaf--ensure-clean-working-tree repo "pulling from Overleaf")
-	                                     (unless skip-auth
-		                                   (git-overleaf--ensure-authenticated "pulling from Overleaf"))
-	                                     (git-overleaf--with-downloaded-snapshot
-	                                      (git-overleaf--project-id repo)
-	                                      (lambda (remote-root)
-		                                    (git-overleaf--fresh-pull repo remote-root))))))
+	                                   (git-overleaf--set-repo-url repo)
+	                                   (git-overleaf--prepare-sync-metadata-repo repo)
+	                                   (git-overleaf--ensure-pull-startable repo)
+	                                   (unless skip-auth
+	                                     (git-overleaf--ensure-authenticated
+	                                      "pulling from Overleaf"))
+	                                   (git-overleaf--with-downloaded-snapshot
+	                                    (git-overleaf--project-id repo)
+	                                    (lambda (remote-root)
+	                                      (git-overleaf--pull-with-remote-state
+	                                       repo remote-root)))))
 
 
 
@@ -791,13 +643,14 @@ already changed local or remote state are not rolled back."
   "a" #'git-overleaf-authenticate
   "b" #'git-overleaf-browse-remote
   "c" #'git-overleaf-clone
-  "F" #'git-overleaf-overwrite-local
   "f" #'git-overleaf-fetch
   "k" #'git-overleaf-force-stop
   "l" #'git-overleaf-pull
+  "q" #'git-overleaf-pull-abort
   "p" #'git-overleaf-push
+  "R" #'git-overleaf-reset
   "r" #'git-overleaf-register-remote
-  "s" #'git-overleaf-push)
+  "s" #'git-overleaf-status)
 
 
 (provide 'git-overleaf)
