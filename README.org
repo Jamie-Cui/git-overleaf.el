@@ -177,10 +177,9 @@ pushing, or pulling.  The primary command is:
 M-x git-overleaf-authenticate
 #+end_example
 
-If ~git-overleaf-clone~, ~git-overleaf-init~,
-~git-overleaf-fetch~, ~git-overleaf-overwrite-local~,
-~git-overleaf-push~, ~git-overleaf-overwrite-remote~, or
-~git-overleaf-pull~ starts without valid cookies, it prompts in the
+If ~git-overleaf-clone~, ~git-overleaf-init~, ~git-overleaf-fetch~,
+~git-overleaf-push~, or ~git-overleaf-pull~ starts without valid cookies,
+it prompts in the
 minibuffer to run ~git-overleaf-authenticate~ first.
 
 ** Webdriver backend
@@ -294,14 +293,17 @@ working tree:
 - run ~git-overleaf-push~ to upload local commits;
 - run ~git-overleaf-pull~ to incorporate remote Overleaf changes.
 
-~git-overleaf-push~ prepares the local branch before contacting
-Overleaf.  If staged changes exist, it commits them automatically.  If
-unstaged or untracked files exist, it asks whether to stage all changes
-first.  It then fetches the latest remote snapshot and uploads local
+~git-overleaf-push~ uploads committed ~HEAD~ only.  It never stages or
+commits files, and staged, unstaged, and untracked working-tree changes
+are left untouched.  It fetches the latest remote snapshot and uploads
 ~HEAD~ only when the remote state has not diverged.
 
-~git-overleaf-pull~ requires a clean working tree and must run from a
-normal branch, not a detached ~HEAD~.
+Like ~git pull~, ~git-overleaf-pull~ allows staged, unstaged, and
+untracked local changes when Git can carry them through the merge
+without overwriting them.  Non-overlapping changes remain in the
+working tree.  If incoming changes would overwrite local changes, Git
+rejects the merge and leaves the local changes intact.  Pull must still
+run from a normal branch, not a detached ~HEAD~.
 
 ** Push to Overleaf
 
@@ -325,6 +327,17 @@ Its behavior is:
 | Remote already matches ~HEAD~ | Update the base ref only. |
 | Only remote changed | Stop and ask you to run ~git-overleaf-pull~. |
 | Local and remote both changed differently | Stop and ask you to pull first. |
+
+With a prefix argument, ~C-u M-x git-overleaf-push~ is the equivalent of
+~git push --force~: after confirmation it replaces divergent remote
+content with local ~HEAD~.  The Lisp API accepts FORCE as its second
+argument.
+
+Uploads are multi-step Overleaf API operations.  Before the first remote
+mutation, push records a recovery journal.  If an upload is interrupted,
+run push again to resume when the observed remote is a partial application
+of the same target.  If Overleaf also changed independently, run pull to
+merge it or explicitly force-push to replace it.
 
 For existing remote Overleaf text documents, changed UTF-8 text is
 updated through Overleaf's real-time ShareJS text OT path.  This
@@ -359,50 +372,47 @@ The command compares the same three states.  Its behavior is:
 After a clean merge caused by remote divergence, run
 ~git-overleaf-push~ to publish the merged result back to Overleaf.
 
-** Overwrite the local branch from Overleaf
+Local changes that do not overlap incoming paths are preserved across
+the pull.  If Git rejects the merge because local changes would be
+overwritten, the remote snapshot is still fetched, but no pending pull
+is recorded; commit, stash, or otherwise move the overlapping changes
+and retry.
+
+After resolving and committing a pull conflict, normal push completes the
+sync.  If Overleaf changed again in the meantime, run pull again; it merges
+the newer snapshot instead of rejecting the repository merely because a
+pending pull exists.
+
+** Reset to the cached Overleaf snapshot
 
 Run:
 
 #+begin_example
-M-x git-overleaf-overwrite-local
+M-x git-overleaf-fetch
+M-x git-overleaf-reset
 #+end_example
 
-This is the destructive counterpart of a forced push: it downloads the
-latest Overleaf snapshot, creates a safety ref for the previous local
-~HEAD~ when local backups are enabled, and replaces the current branch,
-index, and working tree with the remote snapshot.  Staged, unstaged, and untracked changes are discarded;
-ignored files are preserved.  The interactive command always asks for
-confirmation and detached ~HEAD~ is rejected.
+Reset never accesses the network; it targets the snapshot already stored
+in ~refs/git-overleaf/remote~.  Without a prefix it performs mixed-reset
+semantics: HEAD and the index move to the cached snapshot while working
+tree files are preserved.  With ~C-u M-x git-overleaf-reset~, it performs
+hard-reset semantics and also replaces tracked working-tree files.
+Untracked and ignored files are preserved in both modes; the command never
+runs ~git clean~.  It creates a safety ref before moving HEAD, updates the
+base, and clears pending synchronization metadata after success.
 
-Only after the snapshot has downloaded successfully does the command
-clean and reset the local repository.  On success it updates both the
-base and remote refs and clears any pending Overleaf pull.  The safety ref
-under ~refs/git-overleaf/backups/~ preserves committed local history, but
-does not preserve discarded uncommitted or untracked content.
-
-** Overwrite the Overleaf remote
+** Force-push to Overleaf
 
 Run:
 
 #+begin_example
-M-x git-overleaf-overwrite-remote
+C-u M-x git-overleaf-push
 #+end_example
 
-This recovery command uses the same local preparation as
-~git-overleaf-push~, but always replaces the remote Overleaf project
-contents with the local ~HEAD~ snapshot.  Existing remote text documents
-are still updated through text OT when supported; other entries use
-Overleaf upload and delete APIs.  Use this command only when the local
-state is intended to replace the remote state.  The interactive command
-always asks for confirmation.  This is git-overleaf's semantic equivalent
-of ~git push --force~.
-
-A successful overwrite also abandons and clears a pending Overleaf pull,
-so this command is the recovery path after a pull was manually aborted or
-its pending metadata became stale.  It never aborts a Git merge or discards
-unresolved conflicts automatically: first resolve and commit the merge, or
-run ~git merge --abort~, then run the overwrite again.  If the overwrite
-fails, the pending state is retained so it can be retried safely.
+Force push uses the same HEAD-only upload path but intentionally replaces
+remote divergence.  It refuses an active or unresolved Git merge.  A
+successful force push clears previous pending synchronization state; an
+interrupted one retains a resumable push journal.
 
 ** Conflict handling
 
@@ -417,16 +427,14 @@ If the merge conflicts:
 - create the merge commit;
 - run ~git-overleaf-push~ to upload the merged result.
 
-To abandon the pull and keep the local version instead, resolve the
-conflicts or run ~git merge --abort~, then run
-~git-overleaf-overwrite-remote~.  This explicitly replaces Overleaf with
-the resulting local ~HEAD~ and clears the pending pull only after a
-successful overwrite.
+To abandon an active pull, run ~git-overleaf-pull-abort~.  It runs
+~git merge --abort~ and clears pending metadata only after Git succeeds.
+If the merge was already aborted manually, it clears the stale metadata.
+It refuses after the merge has been committed because silently rewriting
+committed history would be unsafe.
 
-To abandon the pull and accept the remote version instead, run
-~git-overleaf-overwrite-local~.  After confirmation it discards the merge
-worktree and local changes, replaces the branch from Overleaf, and clears
-the pending pull only after the local overwrite succeeds.
+After aborting, keep local content with a force push, or accept the cached
+remote snapshot with ~git-overleaf-reset~ (use a prefix for hard mode).
 
 Conflict resolution is intentionally handled by Git rather than by ediff.
 
@@ -436,22 +444,16 @@ The clone, init, push, and pull commands store project metadata in the
 repository's local Git config.  After a repository is bound, later pushes
 and pulls can run from anywhere inside that repository.
 
-Clone and init also register a branchless logical Git remote named
-=overleaf= by default.  It has no URL, push URL, or refspec; its local
-config marker associates it with the Overleaf project while
-=skipFetchAll= and =skipDefaultUpdate= keep ordinary Git bulk operations
-from contacting it.  The latest successfully observed snapshot is stored
-in ~refs/git-overleaf/remote~, independently of the synchronized base in
-~refs/git-overleaf/base~.  Normal remotes such as =origin= are unchanged.
+Clone and init may register a branchless logical Git remote named
+=overleaf=.  It has no URL, push URL, or refspec; its local config marker
+lets ordinary Magit remote selection route that name through git-overleaf.
+The logical remote is optional: every git-overleaf command and explicit
+Magit =O= action works without it.  Register or restore it with
+~git-overleaf-register-remote~ only when that routing is useful.
 
-For a repository created by an older git-overleaf version, either run
-~git-overleaf-register-remote~ once or use an explicit uppercase =O=
-operation in Magit, which offers to register the remote before continuing.
-If =overleaf= is already a real Git remote, clone/init leaves it untouched;
-interactive Magit registration prompts for an alternate name.  Normal
-~git remote rename~ and ~git remote remove~ work.  Opening or refreshing a
-Magit status buffer never registers a remote, so a removed logical remote is
-not recreated without approval from an explicit =O= operation.
+The latest successfully observed snapshot is stored in
+~refs/git-overleaf/remote~, independently of the synchronized base in
+~refs/git-overleaf/base~.  Normal remotes such as =origin= are unchanged.
 
 Successful push operations maintain a root-level
 ~.git-overleaf-sync.json~ file on the Overleaf project when
@@ -494,8 +496,8 @@ long network, unzip, and Git work is running:
 
 Interactive commands still collect minibuffer input and confirmation in
 the foreground, then run the expensive work in the background.  This
-applies to clone, init, push, pull, remote overwrite, authentication, and
-Magit remote refreshes.
+applies to clone, init, fetch, push, pull, authentication, and Magit remote
+refreshes.  Status, reset, and pull-abort are local operations.
 
 To cancel currently tracked background Overleaf operations:
 
@@ -512,7 +514,7 @@ locally or remotely is not rolled back.
 Snapshot downloads echo curl progress in the minibuffer as
 =Downloading project ... N%= when ~git-overleaf-log-echo~ is non-nil.
 
-Push and overwrite operations report the completed content mutations and
+Push operations report the completed content mutations and
 the current path as =Uploading content for project ... N% (I/T: ACTION PATH)=.  This
 is operation progress rather than a byte count because one push may mix
 text OT updates, multipart uploads, folder creation, and deletion.  A
@@ -568,24 +570,17 @@ M-x git-overleaf-magit-refresh-remote
 #+end_example
 
 The standard Magit fetch, pull, and push transients each add an uppercase
-=O= action labelled with the logical remote name.  When the remote is not
-registered, the label instead says that the action will register it and
-then fetch, pull, or push.  Selecting it asks for confirmation, registers
-the default name (or prompts for another name after a collision), and
-continues the requested operation.  These actions are branchless: fetch
-normally updates only ~refs/git-overleaf/remote~, pull runs
-~git-overleaf-pull~, and push normally runs ~git-overleaf-push~.  The fetch
-action accepts =-f=/=--force= and, after confirmation, runs
-~git-overleaf-overwrite-local~.  The push action honors Magit's
-force arguments: =-f= (force with lease) uses the same guarded push because
-git-overleaf already rejects a remote snapshot that differs from its
-recorded base, while =-F= (force) asks for confirmation and runs
-~git-overleaf-overwrite-remote~.  Other active Git-only transient arguments
-are rejected.  Selecting the logical remote from Magit's ordinary "fetch
-elsewhere" action also routes a fetch through git-overleaf and honors the
-same force argument; branches and refspecs are unsupported.  All other Git
-remotes retain Magit's normal behavior.  Explicit =O= fetch bypasses the
-automatic remote refresh throttle.
+=O= action.  These explicit actions work whether or not a logical remote is
+registered.  Fetch only updates ~refs/git-overleaf/remote~; =-f=/=--force=
+does not turn fetch into a reset.  Pull runs ~git-overleaf-pull~.  Push runs
+~git-overleaf-push~; Magit's force option reaches the same command with a
+prefix and asks for confirmation.  =--force-with-lease= keeps the normal
+guarded behavior.  Other Git-only transient arguments are rejected.
+
+When a logical remote is registered, selecting it from Magit's ordinary
+fetch action routes the snapshot refresh through git-overleaf.  Branches
+and refspecs are unsupported.  Other Git remotes retain Magit's normal
+behavior.  Explicit =O= fetch bypasses the automatic refresh throttle.
 
 On the Overleaf section, =G= refreshes the remote and =RET= opens the
 project in a browser.  =C-c C-c= is a command prefix with these keys:
@@ -593,12 +588,14 @@ project in a browser.  =C-c C-c= is a command prefix with these keys:
 | Key | Command |
 |-----+---------|
 | =b= | Browse the Overleaf project. |
-| =F= | Overwrite local state from Overleaf after confirmation. |
+| =f= | Fetch the remote snapshot. |
 | =g= | Refresh the remote snapshot. |
 | =l= | Pull from Overleaf. |
 | =p= | Push to Overleaf. |
+| =q= | Abort a pending pull. |
+| =R= | Reset to the cached remote snapshot. |
 | =r= | Register the logical Overleaf remote. |
-| =O= | Force-push to the remote after confirmation. |
+| =s= | Show cached synchronization status. |
 | =L= | Show the git-overleaf log. |
 | =k= | Stop background Overleaf operations. |
 
@@ -610,7 +607,7 @@ To push automatically after commits created from Emacs through Magit or
 #+begin_src elisp
   (with-eval-after-load 'git-commit
     (add-hook 'git-commit-post-finish-hook
-              (lambda () (git-overleaf-push nil t))))
+              (lambda () (git-overleaf-push nil nil t))))
 #+end_src
 
 The hook only pushes repositories that already contain Overleaf project
@@ -626,11 +623,12 @@ hook-driven pushes.
 | ~git-overleaf-clone~ | Clone an Overleaf project into a new local Git repository. |
 | ~git-overleaf-init~ | Bind the current Git repository to an Overleaf project. |
 | ~git-overleaf-register-remote~ | Register or migrate the branchless logical Overleaf remote. |
+| ~git-overleaf-status~ | Show cached sync, pending, merge, and worktree state. |
 | ~git-overleaf-fetch~ | Refresh only the latest Overleaf snapshot ref. |
-| ~git-overleaf-overwrite-local~ | Replace the current local branch and working tree from Overleaf. |
 | ~git-overleaf-push~ | Upload local ~HEAD~ to Overleaf when the remote has not diverged. |
-| ~git-overleaf-overwrite-remote~ | Replace the remote Overleaf project with local ~HEAD~. |
 | ~git-overleaf-pull~ | Pull and merge the latest Overleaf snapshot. |
+| ~git-overleaf-pull-abort~ | Abort an active pending pull or clear stale pull metadata. |
+| ~git-overleaf-reset~ | Mixed-reset to the cached remote snapshot; prefix selects hard mode. |
 | ~git-overleaf-browse-remote~ | Open the bound Overleaf project in a browser. |
 | ~git-overleaf-force-stop~ | Cancel tracked background Overleaf operations. |
 | ~git-overleaf-log~ | Display the global log buffer. |
@@ -649,15 +647,14 @@ Default bindings in ~git-overleaf-command-map~:
 | =a= | ~git-overleaf-authenticate~ |
 | =b= | ~git-overleaf-browse-remote~ |
 | =c= | ~git-overleaf-clone~ |
-| =F= | ~git-overleaf-overwrite-local~ |
 | =f= | ~git-overleaf-fetch~ |
 | =k= | ~git-overleaf-force-stop~ |
 | =l= | ~git-overleaf-pull~ |
 | =p= | ~git-overleaf-push~ |
+| =q= | ~git-overleaf-pull-abort~ |
+| =R= | ~git-overleaf-reset~ |
 | =r= | ~git-overleaf-register-remote~ |
-| =s= | ~git-overleaf-push~ |
-
-The =s= binding is retained as a compatibility shortcut.
+| =s= | ~git-overleaf-status~ |
 
 * Customization
 
@@ -672,7 +669,6 @@ Important user options include:
 | ~git-overleaf-enable-async~ | Run long interactive operations in background threads. |
 | ~git-overleaf-remote-name~ | Default branchless logical remote name. |
 | ~git-overleaf-remote-ref~ | Ref storing the latest observed Overleaf snapshot. |
-| ~git-overleaf-sync-auto-commit-message~ | Commit message for automatic local checkpoint commits before push. |
 | ~git-overleaf-sync-metadata-enabled~ | Enable the remote sync metadata file. |
 | ~git-overleaf-sync-metadata-file~ | Name of the reserved remote metadata file. |
 | ~git-overleaf-local-backups-enabled~ | Create local safety refs during sync operations. |

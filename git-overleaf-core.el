@@ -160,12 +160,6 @@ update does not produce the expected result."
   :type 'integer
   :group 'git-overleaf)
 
-(defcustom git-overleaf-sync-auto-commit-message
-  "chore: checkpoint before Overleaf push"
-  "Commit message used when `git-overleaf-push' auto-commits changes."
-  :type 'string
-  :group 'git-overleaf)
-
 (defcustom git-overleaf-enable-async nil
   "Whether Overleaf commands may run long operations in the background.
 
@@ -291,7 +285,7 @@ this variable directly only when you want custom persistence logic.")
   "Functions called after successful repository operations.
 
 Each function receives the repository root and an operation symbol such
-as `fetch', `pull', `push', or `overwrite'.")
+as `fetch', `pull', `push', `reset', or `pull-abort'.")
 
 (defun git-overleaf--repo-async-key (repo)
   "Return the async operation lock key for REPO."
@@ -1523,25 +1517,51 @@ Return its name, or nil when the default name belongs to a real remote."
      ,@body))
 
 (defun git-overleaf--clear-pending-state (repo)
-  "Remove pending pull metadata from REPO."
+  "Remove pending synchronization metadata from REPO."
   (dolist (key '("git-overleaf.pendingRemoteCommit"
+                 "git-overleaf.pendingTargetCommit"
                  "git-overleaf.pendingAction"))
     (git-overleaf--git-config-unset repo key)))
 
 (defun git-overleaf--set-pending-pull-state (repo remote-commit)
   "Persist a pending pull state inside REPO recording REMOTE-COMMIT."
+  (git-overleaf--clear-pending-state repo)
   (git-overleaf--git-config-set
    repo "git-overleaf.pendingRemoteCommit" remote-commit)
   (git-overleaf--git-config-set
    repo "git-overleaf.pendingAction" "pull"))
 
+(defun git-overleaf--set-pending-push-state
+    (repo remote-commit target-commit)
+  "Persist a resumable push from REMOTE-COMMIT to TARGET-COMMIT in REPO."
+  (git-overleaf--clear-pending-state repo)
+  (git-overleaf--git-config-set
+   repo "git-overleaf.pendingRemoteCommit" remote-commit)
+  (git-overleaf--git-config-set
+   repo "git-overleaf.pendingTargetCommit" target-commit)
+  (git-overleaf--git-config-set
+   repo "git-overleaf.pendingAction" "push"))
+
 (defun git-overleaf--pending-state (repo)
-  "Return pending pull metadata for REPO, or nil."
+  "Return pending synchronization metadata for REPO, or nil."
   (when-let* ((action-str
                (git-overleaf--git-config-get repo "git-overleaf.pendingAction")))
     `(:action ,(intern action-str)
 		      :remote-commit
-		      ,(git-overleaf--git-config-get repo "git-overleaf.pendingRemoteCommit"))))
+		      ,(git-overleaf--git-config-get repo "git-overleaf.pendingRemoteCommit")
+		      :target-commit
+		      ,(git-overleaf--git-config-get repo "git-overleaf.pendingTargetCommit"))))
+
+(defun git-overleaf--record-remote-fetch-time (repo)
+  "Record the current time as REPO's latest observed remote snapshot time."
+  (git-overleaf--git-config-set
+   repo
+   "git-overleaf.remoteFetchedAt"
+   (format-time-string "%Y-%m-%dT%H:%M:%SZ" (current-time) t)))
+
+(defun git-overleaf--remote-fetched-at (repo)
+  "Return the timestamp of REPO's latest observed remote snapshot."
+  (git-overleaf--git-config-get repo "git-overleaf.remoteFetchedAt"))
 
 ;;;; Local safety backups
 

@@ -25,10 +25,7 @@
 (declare-function git-overleaf--async-supported-p "git-overleaf-core")
 (declare-function git-overleaf--classify-sync-state "git-overleaf-sync")
 (declare-function git-overleaf--fetch-sync "git-overleaf")
-(declare-function git-overleaf--git-remotes "git-overleaf-core" (repo))
 (declare-function git-overleaf--repo-async-key "git-overleaf-core")
-(declare-function git-overleaf-overwrite-local
-                  "git-overleaf" (&optional directory))
 (declare-function magit--insert-diff "magit-diff" (keep-error &rest args))
 (declare-function magit-fetch-arguments "magit-fetch" ())
 (declare-function magit-git-fetch "magit-fetch" (remote args))
@@ -111,7 +108,10 @@ cached snapshot freshness."
          face)
     (cond
      (pending
-      (setq label (format "pending %s" (plist-get pending :action)))
+      (setq label
+            (format "pending %s (%s)"
+                    (plist-get pending :action)
+                    (git-overleaf--pending-phase repo pending)))
       (setq face 'error))
      (remote-known
       (setq label (nth 1 spec))
@@ -199,14 +199,16 @@ Display LABEL using FACE."
 (defvar-keymap git-overleaf-magit-command-map
   :doc "Commands available from an Overleaf Magit section."
   "b" #'git-overleaf-browse-remote
-  "F" #'git-overleaf-overwrite-local
+  "f" #'git-overleaf-fetch
   "g" #'git-overleaf-magit-refresh-remote
   "k" #'git-overleaf-force-stop
   "l" #'git-overleaf-pull
   "L" #'git-overleaf-log
-  "O" #'git-overleaf-overwrite-remote
   "p" #'git-overleaf-push
-  "r" #'git-overleaf-register-remote)
+  "q" #'git-overleaf-pull-abort
+  "R" #'git-overleaf-reset
+  "r" #'git-overleaf-register-remote
+  "s" #'git-overleaf-status)
 
 (defvar-keymap git-overleaf-magit-section-map
   :doc "Keymap for the Overleaf Magit status section."
@@ -348,7 +350,6 @@ calls continue to follow that user option."
       (when (git-overleaf-magit--remote-state-refreshing
              (git-overleaf-magit--remote-state))
         (user-error "Remote refresh already in progress")))
-    (git-overleaf-magit--require-registered-remote repo)
     (git-overleaf--set-repo-url repo)
     (let* ((state
             (with-current-buffer magit-buf
@@ -396,7 +397,6 @@ calls continue to follow that user option."
       (let ((state (git-overleaf-magit--remote-state))
             (key (git-overleaf--repo-async-key repo)))
         (when (and (git-overleaf--managed-repo-p repo)
-                   (git-overleaf-magit--registered-remote-p repo)
                    (not
                     (git-overleaf-magit--remote-state-refreshing state))
                    (not (git-overleaf--async-key-active-p key)))
@@ -431,59 +431,14 @@ calls continue to follow that user option."
       (user-error "Not an Overleaf project"))
     repo))
 
-(defun git-overleaf-magit--registered-remote-p (repo)
-  "Return non-nil when REPO has one logical Overleaf remote."
-  (condition-case nil
-      (and (git-overleaf--remote-name repo) t)
-    (user-error nil)))
-
-(defun git-overleaf-magit--require-registered-remote (&optional repo)
-  "Return REPO's logical Overleaf remote, or signal an actionable error."
-  (or (git-overleaf--remote-name
-       (or repo (git-overleaf-magit--require-managed-repo)))
-      (user-error
-       (concat
-        "No logical Overleaf remote is registered; run "
-        "M-x git-overleaf-register-remote"))))
-
-(defun git-overleaf-magit--registration-name (repo)
-  "Read or return a safe logical Overleaf remote name for REPO."
-  (if (member git-overleaf-remote-name
-              (git-overleaf--git-remotes repo))
-      (read-string
-       (format
-        "Git remote `%s' already exists; logical Overleaf remote name: "
-        git-overleaf-remote-name)
-       (concat git-overleaf-remote-name "-project"))
-    git-overleaf-remote-name))
-
-(defun git-overleaf-magit--ensure-registered-remote (repo operation)
-  "Return REPO's logical remote, registering it for OPERATION if approved.
-This helper is for explicit interactive Magit actions only.  It never
-runs from status insertion or automatic refresh paths."
-  (or (git-overleaf--remote-name repo)
-      (progn
-        (unless (y-or-n-p
-                 (format
-                  (concat
-                   "No logical Overleaf remote is registered; "
-                   "register `%s' and continue with %s? ")
-                  git-overleaf-remote-name
-                  operation))
-          (user-error
-           "Overleaf %s cancelled; no logical remote was registered"
-           operation))
-        (git-overleaf-register-remote
-         repo
-         (git-overleaf-magit--registration-name repo)))))
-
-(defun git-overleaf-magit--operation-description (operation)
+(defun git-overleaf-magit--operation-description (_operation)
   "Return the transient description for Overleaf OPERATION."
   (condition-case nil
       (let ((repo (git-overleaf-magit--require-managed-repo)))
         (if-let* ((remote (git-overleaf--remote-name repo)))
             (format "Overleaf: %s" remote)
-          (format "Register Overleaf remote and %s" operation)))
+          (format "Overleaf: %s"
+                  (git-overleaf--project-name repo))))
     (error "Overleaf")))
 
 (defun git-overleaf-magit--fetch-description ()
@@ -509,7 +464,7 @@ runs from status insertion or automatic refresh paths."
 (defun git-overleaf-magit--push-mode (args)
   "Return the Overleaf push mode selected by Magit ARGS.
 No arguments and `--force-with-lease' select the normal guarded push.
-The Git `-f' and `--force' arguments select a remote overwrite.  Signal
+The Git `-f' and `--force' arguments select a force-push.  Signal
 when ARGS contains any other argument or combines the two force modes."
   (cond
    ((null args) 'normal)
@@ -526,14 +481,13 @@ when ARGS contains any other argument or combines the two force modes."
 
 (defun git-overleaf-magit--fetch-mode (args)
   "Return the Overleaf fetch mode selected by Magit ARGS.
-No arguments select a remote-ref refresh.  The Git `-f' and `--force'
-arguments select a destructive local overwrite.  Signal for every other
-argument or argument combination."
+No arguments, `-f', and `--force' all select the same remote-ref refresh.
+Fetch never moves HEAD, the index, or the working tree."
   (cond
-   ((null args) 'normal)
-   ((and (null (cdr args))
-         (member (car args) '("-f" "--force")))
-    'force)
+   ((or (null args)
+        (and (null (cdr args))
+             (member (car args) '("-f" "--force"))))
+    'normal)
    (t
     (user-error
      "Only --force applies to Overleaf fetches; got: %s"
@@ -543,15 +497,9 @@ argument or argument combination."
   "Fetch the branchless logical Overleaf remote."
   :description #'git-overleaf-magit--fetch-description
   (interactive (list (magit-fetch-arguments)))
-  (let ((mode (git-overleaf-magit--fetch-mode args))
-        (repo (git-overleaf-magit--require-managed-repo)))
-    (git-overleaf-magit--ensure-registered-remote repo "fetch")
-    (if (eq mode 'force)
-        (let ((default-directory repo)
-              (git-overleaf-enable-async
-               (git-overleaf--async-supported-p)))
-          (call-interactively #'git-overleaf-overwrite-local))
-      (git-overleaf-magit-refresh-remote t))))
+  (git-overleaf-magit--fetch-mode args)
+  (git-overleaf-magit--require-managed-repo)
+  (git-overleaf-magit-refresh-remote t))
 
 (transient-define-suffix git-overleaf-magit-pull ()
   "Pull the branchless logical Overleaf remote."
@@ -559,7 +507,6 @@ argument or argument combination."
   (interactive)
   (git-overleaf-magit--reject-arguments 'magit-pull)
   (let ((repo (git-overleaf-magit--require-managed-repo)))
-    (git-overleaf-magit--ensure-registered-remote repo "pull")
     (let ((default-directory repo)
           (git-overleaf-enable-async
            (git-overleaf--async-supported-p)))
@@ -571,14 +518,11 @@ argument or argument combination."
   (interactive (list (magit-push-arguments)))
   (let ((mode (git-overleaf-magit--push-mode args))
         (repo (git-overleaf-magit--require-managed-repo)))
-    (git-overleaf-magit--ensure-registered-remote repo "push")
     (let ((default-directory repo)
+          (current-prefix-arg (and (eq mode 'force) '(4)))
           (git-overleaf-enable-async
            (git-overleaf--async-supported-p)))
-      (call-interactively
-       (if (eq mode 'force)
-           #'git-overleaf-overwrite-remote
-         #'git-overleaf-push)))))
+      (call-interactively #'git-overleaf-push))))
 
 (defun git-overleaf-magit--around-git-fetch (function remote args)
   "Route a branchless fetch of logical REMOTE through git-overleaf.
@@ -591,17 +535,11 @@ Call FUNCTION with REMOTE and ARGS for every ordinary Git remote."
     (if (not (and overleaf-remote (equal remote overleaf-remote)))
         (funcall function remote args)
       (pcase (git-overleaf-magit--fetch-mode args)
-        ('force
-         (let ((default-directory repo)
-               (git-overleaf-enable-async
-                (git-overleaf--async-supported-p)))
-           (call-interactively #'git-overleaf-overwrite-local)))
-        (_
-         (git-overleaf-magit-refresh-remote t))))))
+        (_ (git-overleaf-magit-refresh-remote t))))))
 
 (defun git-overleaf-magit--operation-succeeded (repo operation)
   "Refresh REPO's Magit status after a successful Overleaf OPERATION."
-  (when (memq operation '(fetch overwrite-local pull push overwrite))
+  (when (memq operation '(fetch pull pull-abort push reset))
     (let ((default-directory repo))
       (when-let* ((buffer (magit-get-mode-buffer 'magit-status-mode)))
         (with-current-buffer buffer

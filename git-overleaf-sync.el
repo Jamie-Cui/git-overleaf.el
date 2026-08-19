@@ -290,63 +290,14 @@ Return the created commit id."
     '("-c" "user.name=Overleaf Project"
       "-c" "user.email=git-overleaf@local")))
 
-(defun git-overleaf--commit-working-tree (repo)
-  "Commit staged changes in REPO before pushing."
-  (apply
-   #'git-overleaf--git-output
-   repo
-   (append
-    (git-overleaf--git-identity-args repo)
-    (if (git-overleaf--merge-in-progress-p repo)
-        '("commit" "--no-edit")
-      (list "commit" "-m" git-overleaf-sync-auto-commit-message)))))
-
-(defun git-overleaf--prepare-working-tree-for-sync
-    (repo &optional unstaged-action)
-  "Stage and commit local changes in REPO when needed for pushing.
-
-UNSTAGED-ACTION controls how unstaged or untracked changes are handled:
-nil or `prompt' asks before staging all changes, `stage' stages all
-changes without prompting, and `error' signals a user error."
+(defun git-overleaf--ensure-no-active-merge (repo action)
+  "Signal if REPO has an unfinished Git merge before ACTION.
+Staged, unstaged, and untracked changes are otherwise allowed."
   (let ((status (git-overleaf--read-repo-status repo)))
-    (when (git-overleaf--repo-status-unmerged status)
+    (when (or (git-overleaf--merge-in-progress-p repo)
+              (git-overleaf--repo-status-unmerged status))
       (user-error
-       "Repository %s has unresolved merge conflicts; resolve them before pushing"
-       repo))
-    (when (git-overleaf--repo-status-unstaged status)
-      (pcase (or unstaged-action 'prompt)
-        ('stage nil)
-        ('error
-         (user-error
-          "Overleaf push requires a clean working tree; stage all changes or stash them first"))
-        (_
-         (unless
-             (y-or-n-p
-              (format
-               "Repository %s has unstaged changes.  Stage all changes and continue with Overleaf push? "
-               repo))
-           (user-error
-            "Overleaf push requires a clean working tree; stage all changes or stash them first"))))
-      (git-overleaf--git-output repo "add" "--all" ".")
-      (setq status (git-overleaf--read-repo-status repo)))
-    (when (git-overleaf--repo-status-staged status)
-      (git-overleaf--create-local-backup-ref repo "before-auto-commit")
-      (git-overleaf--message "Committing local changes before Overleaf push...")
-      (git-overleaf--commit-working-tree repo)
-      t)))
-
-(defun git-overleaf--ensure-clean-working-tree (repo action)
-  "Signal an error if REPO has local changes before ACTION."
-  (let ((status (git-overleaf--read-repo-status repo)))
-    (when (git-overleaf--repo-status-unmerged status)
-      (user-error
-       "Repository %s has unresolved merge conflicts; resolve them before %s"
-       repo
-       action))
-    (when (or (git-overleaf--repo-status-staged status)
-              (git-overleaf--repo-status-unstaged status))
-      (user-error
-       "Repository %s has local changes; commit or stash them before %s"
+       "Repository %s has an unfinished Git merge; complete or abort it before %s"
        repo
        action))))
 
@@ -670,22 +621,29 @@ REMOTE-TABLE is the current Overleaf entity table."
       (when local-root
         (ignore-errors (delete-directory local-root t))))))
 
-(defun git-overleaf--record-remote-snapshot (repo remote-root)
-  "Create and record a Git commit in REPO representing REMOTE-ROOT."
+(defun git-overleaf--record-remote-snapshot
+    (repo remote-root &optional parent)
+  "Create and record a Git commit in REPO representing REMOTE-ROOT.
+When PARENT is non-nil, make the snapshot its child and do not replace
+it with a commit named by remote sync metadata."
   (let* ((snapshot-commit
           (git-overleaf--commit-directory
            repo
            remote-root
-           (git-overleaf--rev-parse-noerror
-            repo
-            (git-overleaf--base-ref repo))
+           (or parent
+               (git-overleaf--rev-parse-noerror
+                repo
+                (git-overleaf--base-ref repo)))
            (format "overleaf: remote snapshot %s"
                    (format-time-string "%Y-%m-%d %H:%M:%S"))))
          (snapshot-tree (git-overleaf--tree-id repo snapshot-commit))
          (remote-commit
-          (or (git-overleaf--remote-sync-metadata-commit repo snapshot-tree)
+          (or (and (not parent)
+                   (git-overleaf--remote-sync-metadata-commit
+                    repo snapshot-tree))
               snapshot-commit)))
     (git-overleaf--set-remote-ref repo remote-commit)
+    (git-overleaf--record-remote-fetch-time repo)
     remote-commit))
 
 (defun git-overleaf--initialize-base-ref (repo project remote-root)
@@ -705,6 +663,7 @@ not modify the working tree or perform a pull/push."
     (git-overleaf--clear-pending-state repo)
     (git-overleaf--set-base-ref repo remote-commit)
     (git-overleaf--set-remote-ref repo remote-commit)
+    (git-overleaf--record-remote-fetch-time repo)
     remote-commit))
 
 (defun git-overleaf--classify-sync-state (base-tree head-tree remote-tree)
@@ -722,13 +681,16 @@ not modify the working tree or perform a pull/push."
    (t
     'diverged)))
 
-(defun git-overleaf--read-sync-state (repo remote-root)
-  "Return common sync state for REPO against REMOTE-ROOT."
+(defun git-overleaf--read-sync-state (repo remote-root &optional remote-parent)
+  "Return common sync state for REPO against REMOTE-ROOT.
+When REMOTE-PARENT is non-nil, parent the new snapshot from it."
   (let* ((base-ref (git-overleaf--base-ref repo))
          (base-commit (git-overleaf--rev-parse repo base-ref))
          (head (git-overleaf--rev-parse repo "HEAD"))
          (branch (git-overleaf--current-branch repo))
-         (remote-commit (git-overleaf--record-remote-snapshot repo remote-root))
+         (remote-commit
+          (git-overleaf--record-remote-snapshot
+           repo remote-root remote-parent))
          (base-tree (git-overleaf--tree-id repo base-commit))
          (head-tree (git-overleaf--tree-id repo head))
          (remote-tree (git-overleaf--tree-id repo remote-commit)))
@@ -751,35 +713,73 @@ not modify the working tree or perform a pull/push."
      (plist-get pending :action)
      command)))
 
-(defun git-overleaf--overwrite-pending-state (repo)
-  "Return REPO's supported pending state before a remote overwrite.
-Signal when the pending action is not one that overwrite knows how to
-abandon safely."
-  (when-let* ((pending (git-overleaf--pending-state repo)))
-    (unless (eq (plist-get pending :action) 'pull)
-      (user-error
-       "Repository %s has unsupported pending Overleaf action `%s'"
-       repo
-       (plist-get pending :action)))
-    pending))
+(defun git-overleaf--pending-phase (repo &optional pending)
+  "Return the recovery phase of REPO's PENDING synchronization state."
+  (when-let* ((state (or pending (git-overleaf--pending-state repo))))
+    (pcase (plist-get state :action)
+      ('pull
+       (cond
+        ((or (git-overleaf--merge-in-progress-p repo)
+             (git-overleaf--repo-status-unmerged
+              (git-overleaf--read-repo-status repo)))
+         'merging)
+        ((let ((remote (plist-get state :remote-commit)))
+           (and remote
+                (git-overleaf--rev-parse-noerror repo remote)
+                (git-overleaf--is-ancestor-p repo remote "HEAD")))
+         'committed)
+        (t 'stale)))
+      ('push
+       (if (and (git-overleaf--rev-parse-noerror
+                 repo (or (plist-get state :remote-commit) ""))
+                (git-overleaf--rev-parse-noerror
+                 repo (or (plist-get state :target-commit) "")))
+           'resumable
+         'invalid))
+      (_ 'invalid))))
 
 (defun git-overleaf--signal-pending-pull (repo)
-  "Explain how to finish or abandon REPO's pending Overleaf pull."
-  (if (or (git-overleaf--merge-in-progress-p repo)
+  "Explain how to continue or abandon REPO's pending Overleaf pull."
+  (pcase (git-overleaf--pending-phase repo)
+    ('merging
+     (user-error
+      (concat
+       "Repository %s has an active Overleaf merge; resolve and commit it, "
+       "then run `git-overleaf-push', or run `git-overleaf-pull-abort'")
+      repo))
+    ('committed
+     (user-error
+      (concat
+       "Repository %s has a committed Overleaf merge; run `git-overleaf-push', "
+       "or run `git-overleaf-pull' again if the remote changed")
+      repo))
+    (_
+     (user-error
+      (concat
+       "Repository %s has stale pending pull metadata; run "
+       "`git-overleaf-pull-abort' before starting another operation")
+      repo))))
+
+(defun git-overleaf--ensure-pull-startable (repo)
+  "Signal unless REPO can start or resume an Overleaf pull."
+  (let ((pending (git-overleaf--pending-state repo)))
+    (cond
+     ((or (git-overleaf--merge-in-progress-p repo)
           (git-overleaf--repo-status-unmerged
            (git-overleaf--read-repo-status repo)))
+      (if (eq (plist-get pending :action) 'pull)
+          (git-overleaf--signal-pending-pull repo)
+        (user-error
+         "Repository %s has an unfinished Git merge; complete or abort it before pulling"
+         repo)))
+     ((and pending
+           (eq (git-overleaf--pending-phase repo pending) 'stale))
+      (git-overleaf--signal-pending-pull repo))
+     ((and pending
+           (eq (git-overleaf--pending-phase repo pending) 'invalid))
       (user-error
-       (concat
-        "Repository %s has a pending Overleaf pull and an active Git merge; "
-        "resolve and commit it, then run `git-overleaf-push', or abort it and "
-        "run `git-overleaf-overwrite-remote' to keep local content")
-       repo)
-    (user-error
-     (concat
-      "Repository %s has pending Overleaf pull metadata, but no Git merge is active; "
-      "run `git-overleaf-push' if the merge was already committed, or run "
-      "`git-overleaf-overwrite-remote' to abandon the pull and keep local content")
-     repo)))
+       "Repository %s has invalid pending Overleaf metadata; use `git-overleaf-reset' or `git-overleaf-push' with a force prefix"
+       repo)))))
 
 (defun git-overleaf--ensure-pending-remote-unchanged
     (repo remote-root remote-tree action)
@@ -790,9 +790,107 @@ abandon safely."
              (git-overleaf--tree-id repo current-remote-commit)
              remote-tree)
       (user-error
-       "The remote project changed again while the pending %s was being finalized; run `git-overleaf-overwrite-remote' to keep local content"
+       "The remote project changed again while the pending %s was being finalized; run `git-overleaf-pull' to integrate it, or force `git-overleaf-push' to replace it"
        action))
     current-remote-commit))
+
+(defun git-overleaf--tree-entry-map (repo revision)
+  "Return a path-to-object-entry table for REVISION in REPO."
+  (let ((table (make-hash-table :test #'equal))
+        (output (git-overleaf--git-output
+                 repo "ls-tree" "-r" "-z" "--full-tree" revision)))
+    (dolist (record (split-string output "\0" t))
+      (when (string-match
+             "\\`\\([^ ]+ [^ ]+ [^\t]+\\)\t\\(.*\\)\\'"
+             record)
+        (puthash (match-string 2 record) (match-string 1 record) table)))
+    table))
+
+(defun git-overleaf--partial-push-compatible-p
+    (repo base target current)
+  "Return non-nil if CURRENT is a partial application of BASE to TARGET."
+  (let ((base-map (git-overleaf--tree-entry-map repo base))
+        (target-map (git-overleaf--tree-entry-map repo target))
+        (current-map (git-overleaf--tree-entry-map repo current))
+        (paths (make-hash-table :test #'equal))
+        (compatible t))
+    (dolist (table (list base-map target-map current-map))
+      (maphash (lambda (path _entry) (puthash path t paths)) table))
+    (maphash
+     (lambda (path _)
+       (let ((base-entry (gethash path base-map))
+             (target-entry (gethash path target-map))
+             (current-entry (gethash path current-map)))
+         (unless (or (equal current-entry base-entry)
+                     (equal current-entry target-entry))
+           (setq compatible nil))))
+     paths)
+    compatible))
+
+(defun git-overleaf--worktree-state (repo)
+  "Return symbols describing REPO's index and working tree."
+  (let ((status (git-overleaf--read-repo-status repo)))
+    (delq nil
+          (list
+           (and (git-overleaf--repo-status-staged status) 'staged)
+           (and (git-overleaf--repo-status-unstaged status) 'unstaged)
+           (and (git-overleaf--repo-status-unmerged status) 'unmerged)))))
+
+(defun git-overleaf--status-recommendation (state pending-phase merge-active)
+  "Return a next-action string for STATE, PENDING-PHASE, and MERGE-ACTIVE."
+  (cond
+   ((eq pending-phase 'merging)
+    "Resolve and commit, or run git-overleaf-pull-abort")
+   ((eq pending-phase 'committed)
+    "Run git-overleaf-push; run git-overleaf-pull first if Overleaf changed again")
+   ((eq pending-phase 'stale)
+    "Run git-overleaf-pull-abort")
+   ((eq pending-phase 'resumable)
+    "Run git-overleaf-push to resume, git-overleaf-pull to reconcile, or force push")
+   ((eq pending-phase 'invalid)
+    "Run git-overleaf-reset, or force git-overleaf-push")
+   (merge-active
+    "Complete or abort the active Git merge")
+   ((eq state 'remote-unknown) "Run git-overleaf-fetch")
+   ((memq state '(in-sync head-matches-remote)) "No synchronization needed")
+   ((eq state 'remote-matches-base) "Run git-overleaf-push")
+   ((memq state '(head-matches-base diverged)) "Run git-overleaf-pull")
+   (t "Inspect the repository state")))
+
+(defun git-overleaf--status-data (repo)
+  "Return a read-only synchronization status plist for REPO."
+  (let* ((base-ref (git-overleaf--base-ref repo))
+         (remote-ref (git-overleaf--remote-ref repo))
+         (base (git-overleaf--rev-parse repo base-ref))
+         (head (git-overleaf--rev-parse repo "HEAD"))
+         (remote (git-overleaf--rev-parse-noerror repo remote-ref))
+         (pending (git-overleaf--pending-state repo))
+         (pending-phase (git-overleaf--pending-phase repo pending))
+         (merge-active (and (git-overleaf--merge-in-progress-p repo) t))
+         (state
+          (if remote
+              (git-overleaf--classify-sync-state
+               (git-overleaf--tree-id repo base)
+               (git-overleaf--tree-id repo head)
+               (git-overleaf--tree-id repo remote))
+            'remote-unknown)))
+    `(:repo ,repo
+      :project ,(git-overleaf--project-name repo)
+      :branch ,(or (git-overleaf--git-output-noerror
+                    repo "branch" "--show-current")
+                   "detached")
+      :head ,head
+      :base ,base
+      :remote ,remote
+      :state ,state
+      :pending ,pending
+      :pending-phase ,pending-phase
+      :merge-active ,merge-active
+      :worktree ,(git-overleaf--worktree-state repo)
+      :remote-fetched-at ,(git-overleaf--remote-fetched-at repo)
+      :recommendation
+      ,(git-overleaf--status-recommendation
+        state pending-phase merge-active))))
 
 (defun git-overleaf--note-matching-sync-state
     (repo head &optional project-id remote-table)
@@ -803,6 +901,7 @@ metadata."
     (git-overleaf--upload-sync-metadata repo head project-id remote-table))
   (git-overleaf--set-base-ref repo head)
   (git-overleaf--set-remote-ref repo head)
+  (git-overleaf--record-remote-fetch-time repo)
   (git-overleaf--message "Local and remote content already match; base ref updated"))
 
 (defun git-overleaf--upload-head-and-set-base
@@ -813,7 +912,23 @@ metadata."
   (git-overleaf--upload-sync-metadata repo head project-id remote-table)
   (git-overleaf--set-base-ref repo head)
   (git-overleaf--set-remote-ref repo head)
+  (git-overleaf--record-remote-fetch-time repo)
   (apply #'git-overleaf--message format-string args))
+
+(defun git-overleaf--upload-target-with-journal
+    (repo target remote-commit project-id remote-root remote-table
+          format-string &rest args)
+  "Upload TARGET and retain a resumable journal until all mutations succeed."
+  (let ((pending (git-overleaf--pending-state repo)))
+    (unless (and (eq (plist-get pending :action) 'push)
+                 (equal (plist-get pending :target-commit) target))
+      (git-overleaf--create-local-backup-ref
+       repo "pending-push-target" target))
+    (git-overleaf--set-pending-push-state repo remote-commit target)
+    (apply
+     #'git-overleaf--upload-head-and-set-base
+     repo target project-id remote-root remote-table format-string args)
+    (git-overleaf--clear-pending-state repo)))
 
 (defun git-overleaf--finalize-pending-pull
     (repo pending remote-root remote-table)
@@ -823,32 +938,45 @@ REMOTE-ROOT and REMOTE-TABLE describe the current remote state."
   (let* ((remote-commit (plist-get pending :remote-commit)))
     (unless remote-commit
       (user-error
-       "Pending pull metadata is incomplete; run `git-overleaf-overwrite-remote' to abandon it and keep local content"))
+       "Pending pull metadata is incomplete; run `git-overleaf-pull-abort'"))
     (let* ((head (git-overleaf--rev-parse repo "HEAD"))
            (project-id (git-overleaf--project-id repo))
            (remote-tree (git-overleaf--tree-id repo remote-commit)))
       (unless (git-overleaf--is-ancestor-p repo remote-commit head)
         (git-overleaf--signal-pending-pull repo))
-      (git-overleaf--ensure-pending-remote-unchanged
-       repo remote-root remote-tree 'pull)
-      (git-overleaf--upload-head-and-set-base
-       repo head project-id remote-root remote-table
+      (let ((current-remote
+             (git-overleaf--ensure-pending-remote-unchanged
+              repo remote-root remote-tree 'pull)))
+        (git-overleaf--upload-target-with-journal
+         repo head current-remote project-id remote-root remote-table
        "Pushed merged Overleaf pull for `%s'"
-       (git-overleaf--project-name repo))
-      (git-overleaf--clear-pending-state repo))))
+         (git-overleaf--project-name repo))))))
 
-(defun git-overleaf--fresh-push (repo remote-root remote-table)
-  "Perform a fresh push of REPO using REMOTE-ROOT and REMOTE-TABLE."
+(defun git-overleaf--fresh-push (repo remote-root remote-table &optional force)
+  "Push REPO using REMOTE-ROOT and REMOTE-TABLE.
+When FORCE is non-nil, replace divergent remote content with HEAD."
   (let* ((context (git-overleaf--read-sync-state repo remote-root))
          (head (plist-get context :head))
          (branch (plist-get context :branch))
          (project-id (git-overleaf--project-id repo))
+         (remote-commit (plist-get context :remote-commit))
          (status (plist-get context :status)))
-    (pcase status
+    (if force
+        (if (memq status '(in-sync head-matches-remote))
+            (progn
+              (git-overleaf--note-matching-sync-state
+               repo head project-id remote-table)
+              (git-overleaf--clear-pending-state repo))
+          (git-overleaf--upload-target-with-journal
+           repo head remote-commit project-id remote-root remote-table
+           "Force-pushed `%s' to Overleaf"
+           (git-overleaf--project-name repo)))
+      (pcase status
       ('in-sync
        (git-overleaf--upload-sync-metadata repo head project-id remote-table)
        (git-overleaf--set-base-ref repo head)
        (git-overleaf--set-remote-ref repo head)
+       (git-overleaf--record-remote-fetch-time repo)
        (git-overleaf--message "Project `%s' is already in sync"
 				                  (git-overleaf--project-name repo)))
       ('head-matches-remote
@@ -858,85 +986,221 @@ REMOTE-ROOT and REMOTE-TABLE describe the current remote state."
         project-id
         remote-table))
       ('remote-matches-base
-       (git-overleaf--upload-head-and-set-base
-        repo
-        head
-        project-id
-        remote-root
-        remote-table
+       (git-overleaf--upload-target-with-journal
+        repo head remote-commit project-id remote-root remote-table
         "Pushed `%s' to Overleaf"
         (git-overleaf--project-name repo)))
       ('head-matches-base
        (user-error
-        "Remote Overleaf changes exist for `%s'; run `git-overleaf-pull` first"
-        branch))
+	        "Remote Overleaf changes exist for `%s'; run `git-overleaf-pull' first"
+	        branch))
       (_
        (user-error
         "Remote Overleaf changes exist for `%s'; run `git-overleaf-pull' first"
-        (git-overleaf--project-name repo))))))
+        (git-overleaf--project-name repo)))))))
 
-(defun git-overleaf--fresh-pull (repo remote-root)
-  "Perform a fresh pull of REPO using REMOTE-ROOT."
-  (let* ((context (git-overleaf--read-sync-state repo remote-root))
-         (head (plist-get context :head))
+(defun git-overleaf--resume-pending-push
+    (repo pending remote-root remote-table)
+  "Safely resume PENDING push in REPO from the current REMOTE-ROOT."
+  (let* ((base (plist-get pending :remote-commit))
+         (target (plist-get pending :target-commit))
+         (head (git-overleaf--rev-parse repo "HEAD")))
+    (unless (and base target
+                 (git-overleaf--rev-parse-noerror repo base)
+                 (git-overleaf--rev-parse-noerror repo target))
+      (user-error
+       "Pending push metadata is incomplete; run `git-overleaf-reset' or force `git-overleaf-push'"))
+    (unless (string= head target)
+      (user-error
+       "HEAD changed after the interrupted push; run `git-overleaf-pull' to reconcile, or force `git-overleaf-push' to replace Overleaf with the new HEAD"))
+    (let ((current
+           (git-overleaf--record-remote-snapshot repo remote-root base)))
+      (unless (git-overleaf--partial-push-compatible-p
+               repo base target current)
+        (user-error
+         "Overleaf changed independently after the interrupted push; run `git-overleaf-pull' to reconcile, or force `git-overleaf-push' to replace it"))
+      (git-overleaf--upload-target-with-journal
+       repo target current (git-overleaf--project-id repo)
+       remote-root remote-table
+       "Resumed push of `%s' to Overleaf"
+       (git-overleaf--project-name repo)))))
+
+(defun git-overleaf--push-with-remote-state
+    (repo remote-root remote-table &optional force)
+  "Push REPO against downloaded REMOTE-ROOT and REMOTE-TABLE."
+  (let ((pending (git-overleaf--pending-state repo)))
+    (cond
+     (force
+      (git-overleaf--fresh-push repo remote-root remote-table t))
+     ((null pending)
+      (git-overleaf--fresh-push repo remote-root remote-table))
+     ((eq (plist-get pending :action) 'pull)
+      (git-overleaf--finalize-pending-pull
+       repo pending remote-root remote-table))
+     ((eq (plist-get pending :action) 'push)
+      (git-overleaf--resume-pending-push
+       repo pending remote-root remote-table))
+     (t
+      (user-error "Unsupported pending Overleaf action `%s'"
+                  (plist-get pending :action))))))
+
+(defun git-overleaf--apply-pull-context (repo context)
+  "Apply the pull decision described by CONTEXT to REPO."
+  (let* ((head (plist-get context :head))
          (branch (plist-get context :branch))
          (remote-commit (plist-get context :remote-commit))
          (status (plist-get context :status)))
     (pcase status
       ('in-sync
        (git-overleaf--message "Project `%s' is already in sync"
-				                  (git-overleaf--project-name repo)))
+				                  (git-overleaf--project-name repo))
+       'in-sync)
       ('head-matches-remote
-       (git-overleaf--note-matching-sync-state repo head))
+       (git-overleaf--note-matching-sync-state repo head)
+       'matching)
       ('remote-matches-base
-       (git-overleaf--message "No remote Overleaf changes to pull into `%s'" branch))
+       (git-overleaf--message "No remote Overleaf changes to pull into `%s'" branch)
+       'no-remote-changes)
       ('head-matches-base
        (git-overleaf--create-local-backup-ref repo "pull-ff")
        (git-overleaf--git-output repo "merge" "--ff-only" remote-commit)
        (git-overleaf--set-base-ref repo "HEAD")
-       (git-overleaf--message "Pulled remote Overleaf changes into `%s'" branch))
+       (git-overleaf--message "Pulled remote Overleaf changes into `%s'" branch)
+       'fast-forward)
       (_
        (git-overleaf--create-local-backup-ref repo "pull-merge")
-       (let ((merge-result
-              (git-overleaf--git-run
-               repo
-               (list "merge" "--no-ff" "--no-edit" remote-commit)
-               nil
-               t)))
+       (let* ((merge-args
+               (list "merge" "--no-ff" "--no-edit" remote-commit))
+              (merge-result
+               (git-overleaf--git-run repo merge-args nil t)))
          (if (and (integerp (git-overleaf--command-result-status merge-result))
                   (zerop (git-overleaf--command-result-status merge-result)))
              (progn
                (git-overleaf--set-base-ref repo remote-commit)
-               (git-overleaf--message "Pulled Overleaf changes into `%s'" branch))
-           (git-overleaf--create-local-backup-ref
-            repo
-            "pending-pull-remote"
-            remote-commit)
-           (git-overleaf--set-pending-pull-state repo remote-commit)
-           (git-overleaf--warn
-            "Merge conflict on `%s'. Resolve conflicts, commit, then run `git-overleaf-push'."
-            branch)))))))
+               (git-overleaf--message "Pulled Overleaf changes into `%s'" branch)
+               'merged)
+           (if (or (git-overleaf--merge-in-progress-p repo)
+                   (git-overleaf--repo-status-unmerged
+                    (git-overleaf--read-repo-status repo)))
+               (progn
+                 (git-overleaf--create-local-backup-ref
+                  repo
+                  "pending-pull-remote"
+                  remote-commit)
+                 (git-overleaf--set-pending-pull-state repo remote-commit)
+                 (git-overleaf--warn
+                  "Merge conflict on `%s'. Resolve conflicts, commit, then run `git-overleaf-push'."
+                  branch)
+                 'conflict)
+             (error "%s"
+                    (git-overleaf--command-error-message
+                     (git-overleaf--ensure-executable
+                      git-overleaf-git-executable)
+                     merge-args
+                     (git-overleaf--command-result-output
+                      merge-result))))))))))
 
-(defun git-overleaf--overwrite-local-with-remote (repo remote-root)
-  "Overwrite REPO's current branch and working tree from REMOTE-ROOT.
-Record REMOTE-ROOT as a synthetic remote commit before changing local
-state.  Preserve the previous HEAD with a local safety ref, remove
-untracked files without removing ignored files, update both sync refs,
-and clear pending pull metadata only after the overwrite succeeds.  The
-safety ref follows `git-overleaf-local-backups-enabled'."
+(defun git-overleaf--fresh-pull (repo remote-root &optional remote-parent)
+  "Pull REPO using REMOTE-ROOT, optionally parenting it at REMOTE-PARENT."
+  (git-overleaf--apply-pull-context
+   repo
+   (git-overleaf--read-sync-state repo remote-root remote-parent)))
+
+(defun git-overleaf--resume-pending-pull (repo pending remote-root)
+  "Continue a committed PENDING pull in REPO against REMOTE-ROOT."
+  (let ((previous-remote (plist-get pending :remote-commit)))
+    (unless (and previous-remote
+                 (git-overleaf--rev-parse-noerror repo previous-remote)
+                 (git-overleaf--is-ancestor-p
+                  repo previous-remote "HEAD"))
+      (git-overleaf--signal-pending-pull repo))
+    (let* ((context
+            (git-overleaf--read-sync-state
+             repo remote-root previous-remote))
+           (current-remote (plist-get context :remote-commit))
+           (unchanged
+            (string=
+             (git-overleaf--tree-id repo current-remote)
+             (git-overleaf--tree-id repo previous-remote))))
+      (git-overleaf--set-base-ref repo previous-remote)
+      (if unchanged
+          (progn
+            (git-overleaf--message
+             "The committed pull already contains the latest Overleaf snapshot; run `git-overleaf-push'")
+            'pending-ready)
+        (let ((result (git-overleaf--apply-pull-context repo context)))
+          (unless (eq result 'conflict)
+            (git-overleaf--clear-pending-state repo))
+          result)))))
+
+(defun git-overleaf--reconcile-pending-push (repo pending remote-root)
+  "Turn PENDING push into an ordinary pull from REMOTE-ROOT."
+  (let ((base (plist-get pending :remote-commit)))
+    (unless (and base (git-overleaf--rev-parse-noerror repo base))
+      (user-error
+       "Pending push metadata is incomplete; run `git-overleaf-reset' or force `git-overleaf-push'"))
+    (git-overleaf--set-base-ref repo base)
+    (let ((result (git-overleaf--fresh-pull repo remote-root base)))
+      (unless (eq result 'conflict)
+        (git-overleaf--clear-pending-state repo))
+      result)))
+
+(defun git-overleaf--pull-with-remote-state (repo remote-root)
+  "Start or resume an Overleaf pull of REMOTE-ROOT into REPO."
+  (let ((pending (git-overleaf--pending-state repo)))
+    (pcase (plist-get pending :action)
+      ('pull (git-overleaf--resume-pending-pull repo pending remote-root))
+      ('push (git-overleaf--reconcile-pending-push repo pending remote-root))
+      ('nil (git-overleaf--fresh-pull repo remote-root))
+      (action (user-error "Unsupported pending Overleaf action `%s'" action)))))
+
+(defun git-overleaf--abort-pending-pull (repo)
+  "Abort or clear REPO's pending pull without guessing about committed history."
+  (let* ((pending (git-overleaf--pending-state repo))
+         (action (plist-get pending :action))
+         (phase (git-overleaf--pending-phase repo pending)))
+    (unless pending
+      (user-error "Repository %s has no pending Overleaf pull" repo))
+    (unless (eq action 'pull)
+      (user-error
+       "Repository %s has a pending Overleaf %s, not a pull; resume it with push or reconcile it with pull"
+       repo action))
+    (pcase phase
+      ('merging
+       (unless (git-overleaf--merge-in-progress-p repo)
+         (user-error
+          "Repository %s has unmerged entries but no active Git merge; resolve them before clearing pending state"
+          repo))
+       (git-overleaf--git-output repo "merge" "--abort")
+       (git-overleaf--clear-pending-state repo)
+       (git-overleaf--message "Aborted pending Overleaf pull in `%s'" repo))
+      ('committed
+       (user-error
+        "The pending Overleaf merge is already committed; push it, pull newer remote changes, or reset explicitly"))
+      (_
+       (git-overleaf--clear-pending-state repo)
+       (git-overleaf--message "Cleared stale pending Overleaf pull in `%s'" repo)))))
+
+(defun git-overleaf--reset-to-remote (repo mode)
+  "Reset REPO to its cached Overleaf remote ref using MODE.
+MODE is `mixed' or `hard'.  Untracked and ignored files are preserved."
+  (unless (memq mode '(mixed hard))
+    (user-error "Unsupported Overleaf reset mode `%s'" mode))
   (let* ((branch (git-overleaf--current-branch repo))
-         (remote-commit
-          (git-overleaf--record-remote-snapshot repo remote-root)))
-    (git-overleaf--create-local-backup-ref repo "overwrite-local")
-    (git-overleaf--git-output repo "clean" "-fd")
-    (git-overleaf--git-output repo "reset" "--hard" remote-commit)
+         (remote-ref (git-overleaf--remote-ref repo))
+         (remote-commit (git-overleaf--rev-parse-noerror repo remote-ref)))
+    (unless remote-commit
+      (user-error
+       "No cached Overleaf snapshot exists; run `git-overleaf-fetch' first"))
+    (git-overleaf--create-local-backup-ref
+     repo (format "reset-%s" mode))
+    (git-overleaf--git-output
+     repo "reset" (format "--%s" mode) remote-commit)
     (git-overleaf--set-base-ref repo remote-commit)
-    (git-overleaf--set-remote-ref repo remote-commit)
     (git-overleaf--clear-pending-state repo)
     (git-overleaf--message
-     "Overwrote local branch `%s' with Overleaf project `%s'"
-     branch
-     (git-overleaf--project-name repo))
+     "Reset local branch `%s' to cached Overleaf snapshot (%s)"
+     branch mode)
     remote-commit))
 
 
