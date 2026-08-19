@@ -917,6 +917,28 @@ REMOTE-ROOT and REMOTE-TABLE describe the current remote state."
             "Merge conflict on `%s'. Resolve conflicts, commit, then run `git-overleaf-push'."
             branch)))))))
 
+(defun git-overleaf--overwrite-local-with-remote (repo remote-root)
+  "Overwrite REPO's current branch and working tree from REMOTE-ROOT.
+Record REMOTE-ROOT as a synthetic remote commit before changing local
+state.  Preserve the previous HEAD with a local safety ref, remove
+untracked files without removing ignored files, update both sync refs,
+and clear pending pull metadata only after the overwrite succeeds.  The
+safety ref follows `git-overleaf-local-backups-enabled'."
+  (let* ((branch (git-overleaf--current-branch repo))
+         (remote-commit
+          (git-overleaf--record-remote-snapshot repo remote-root)))
+    (git-overleaf--create-local-backup-ref repo "overwrite-local")
+    (git-overleaf--git-output repo "clean" "-fd")
+    (git-overleaf--git-output repo "reset" "--hard" remote-commit)
+    (git-overleaf--set-base-ref repo remote-commit)
+    (git-overleaf--set-remote-ref repo remote-commit)
+    (git-overleaf--clear-pending-state repo)
+    (git-overleaf--message
+     "Overwrote local branch `%s' with Overleaf project `%s'"
+     branch
+     (git-overleaf--project-name repo))
+    remote-commit))
+
 
 (provide 'git-overleaf-sync)
 

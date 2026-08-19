@@ -31,6 +31,9 @@
 (require 'git-overleaf-http)
 (require 'git-overleaf-sync)
 
+(declare-function git-overleaf--overwrite-local-with-remote
+                  "git-overleaf-sync" (repo remote-root))
+
 ;;;; Command helpers
 
 (defun git-overleaf--ensure-authenticated-async (op-desc continuation)
@@ -416,6 +419,45 @@ assume the caller already checked authentication."
            "Finished Overleaf fetch `%s'"
            (git-overleaf--project-name repo))))))))
 
+(defun git-overleaf--confirm-overwrite-local (repo)
+  "Ask for confirmation before overwriting local REPO from Overleaf."
+  (let ((pending (git-overleaf--overwrite-pending-state repo)))
+    (unless
+        (yes-or-no-p
+         (concat
+          (if pending
+              (format
+               "Abandon pending Overleaf %s and overwrite the local branch from project `%s'? "
+               (plist-get pending :action)
+               (git-overleaf--project-name repo))
+            (format
+             "Overwrite the local branch from Overleaf project `%s'? "
+             (git-overleaf--project-name repo)))
+          "This discards staged, unstaged, and untracked changes. "))
+      (user-error "Aborted"))))
+
+(defun git-overleaf--overwrite-local-async (repo)
+  "Start an asynchronous local overwrite for REPO."
+  (git-overleaf--with-repo-log-context repo
+    (git-overleaf--set-repo-url repo)
+    (git-overleaf--confirm-overwrite-local repo)
+    (git-overleaf--overwrite-pending-state repo)
+    (git-overleaf--current-branch repo)
+    (git-overleaf--ensure-authenticated-async
+     "overwriting the local branch from Overleaf"
+     (lambda ()
+       (git-overleaf--async-start
+        (format "Overleaf local overwrite `%s'"
+                (git-overleaf--project-name repo))
+        (lambda () (git-overleaf--overwrite-local-sync repo t))
+        :key (git-overleaf--repo-async-key repo)
+        :on-success
+        (lambda (_commit)
+          (git-overleaf--notify-operation-succeeded repo 'overwrite-local)
+          (git-overleaf--message
+           "Finished Overleaf local overwrite `%s'"
+           (git-overleaf--project-name repo))))))))
+
 ;;;; Interactive commands
 
 ;;;###autoload
@@ -453,6 +495,46 @@ and the last-synchronized base ref are left unchanged."
         (git-overleaf--fetch-async repo)
       (prog1 (git-overleaf--fetch-sync repo nil)
         (git-overleaf--notify-operation-succeeded repo 'fetch)))))
+
+;;;###autoload
+(defun git-overleaf-overwrite-local (&optional directory)
+  "Overwrite the current local branch with the latest Overleaf snapshot.
+
+Optional DIRECTORY is the repository root.  Unlike
+`git-overleaf-fetch', this command moves the current branch and replaces
+the index and working tree with Overleaf content.  Staged, unstaged, and
+untracked changes are discarded; ignored files are preserved.
+
+Before changing local state, create a safety ref for the previous HEAD
+when `git-overleaf-local-backups-enabled' is non-nil.  A successful
+overwrite updates the synchronization base and remote refs and abandons
+any pending Overleaf pull.  Detached HEAD is not supported."
+  (interactive)
+  (let* ((repo (git-overleaf--require-managed-repo directory))
+         (interactive-p (called-interactively-p 'interactive)))
+    (if (and interactive-p (git-overleaf--async-enabled-p))
+        (git-overleaf--overwrite-local-async repo)
+      (when interactive-p
+        (git-overleaf--confirm-overwrite-local repo))
+      (prog1 (git-overleaf--overwrite-local-sync repo nil)
+        (git-overleaf--notify-operation-succeeded repo 'overwrite-local)))))
+
+(defun git-overleaf--overwrite-local-sync (repo &optional skip-auth)
+  "Synchronously overwrite local REPO from Overleaf.
+When SKIP-AUTH is non-nil, assume the caller already checked
+authentication."
+  (git-overleaf--with-repo-log-context repo
+    (git-overleaf--set-repo-url repo)
+    (git-overleaf--prepare-sync-metadata-repo repo)
+    (git-overleaf--overwrite-pending-state repo)
+    (git-overleaf--current-branch repo)
+    (unless skip-auth
+      (git-overleaf--ensure-authenticated
+       "overwriting the local branch from Overleaf"))
+    (git-overleaf--with-downloaded-snapshot
+     (git-overleaf--project-id repo)
+     (lambda (remote-root)
+       (git-overleaf--overwrite-local-with-remote repo remote-root)))))
 
 ;;;###autoload
 (defun git-overleaf-clone (&optional url target-directory)
@@ -709,6 +791,7 @@ already changed local or remote state are not rolled back."
   "a" #'git-overleaf-authenticate
   "b" #'git-overleaf-browse-remote
   "c" #'git-overleaf-clone
+  "F" #'git-overleaf-overwrite-local
   "f" #'git-overleaf-fetch
   "k" #'git-overleaf-force-stop
   "l" #'git-overleaf-pull

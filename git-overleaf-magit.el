@@ -27,6 +27,8 @@
 (declare-function git-overleaf--fetch-sync "git-overleaf")
 (declare-function git-overleaf--git-remotes "git-overleaf-core" (repo))
 (declare-function git-overleaf--repo-async-key "git-overleaf-core")
+(declare-function git-overleaf-overwrite-local
+                  "git-overleaf" (&optional directory))
 (declare-function magit--insert-diff "magit-diff" (keep-error &rest args))
 (declare-function magit-fetch-arguments "magit-fetch" ())
 (declare-function magit-git-fetch "magit-fetch" (remote args))
@@ -197,6 +199,7 @@ Display LABEL using FACE."
 (defvar-keymap git-overleaf-magit-command-map
   :doc "Commands available from an Overleaf Magit section."
   "b" #'git-overleaf-browse-remote
+  "F" #'git-overleaf-overwrite-local
   "g" #'git-overleaf-magit-refresh-remote
   "k" #'git-overleaf-force-stop
   "l" #'git-overleaf-pull
@@ -521,14 +524,34 @@ when ARGS contains any other argument or combines the two force modes."
       "got: %s")
      (mapconcat #'identity args " ")))))
 
-(transient-define-suffix git-overleaf-magit-fetch ()
+(defun git-overleaf-magit--fetch-mode (args)
+  "Return the Overleaf fetch mode selected by Magit ARGS.
+No arguments select a remote-ref refresh.  The Git `-f' and `--force'
+arguments select a destructive local overwrite.  Signal for every other
+argument or argument combination."
+  (cond
+   ((null args) 'normal)
+   ((and (null (cdr args))
+         (member (car args) '("-f" "--force")))
+    'force)
+   (t
+    (user-error
+     "Only --force applies to Overleaf fetches; got: %s"
+     (mapconcat #'identity args " ")))))
+
+(transient-define-suffix git-overleaf-magit-fetch (&optional args)
   "Fetch the branchless logical Overleaf remote."
   :description #'git-overleaf-magit--fetch-description
-  (interactive)
-  (git-overleaf-magit--reject-arguments 'magit-fetch)
-  (let ((repo (git-overleaf-magit--require-managed-repo)))
+  (interactive (list (magit-fetch-arguments)))
+  (let ((mode (git-overleaf-magit--fetch-mode args))
+        (repo (git-overleaf-magit--require-managed-repo)))
     (git-overleaf-magit--ensure-registered-remote repo "fetch")
-    (git-overleaf-magit-refresh-remote t)))
+    (if (eq mode 'force)
+        (let ((default-directory repo)
+              (git-overleaf-enable-async
+               (git-overleaf--async-supported-p)))
+          (call-interactively #'git-overleaf-overwrite-local))
+      (git-overleaf-magit-refresh-remote t))))
 
 (transient-define-suffix git-overleaf-magit-pull ()
   "Pull the branchless logical Overleaf remote."
@@ -567,17 +590,18 @@ Call FUNCTION with REMOTE and ARGS for every ordinary Git remote."
                (git-overleaf--remote-name repo))))
     (if (not (and overleaf-remote (equal remote overleaf-remote)))
         (funcall function remote args)
-      (when args
-        (user-error
-         (concat
-          "Logical Overleaf remote `%s' is branchless; Git fetch "
-          "arguments, branches, and refspecs are unsupported. Use O")
-         remote))
-      (git-overleaf-magit-refresh-remote t))))
+      (pcase (git-overleaf-magit--fetch-mode args)
+        ('force
+         (let ((default-directory repo)
+               (git-overleaf-enable-async
+                (git-overleaf--async-supported-p)))
+           (call-interactively #'git-overleaf-overwrite-local)))
+        (_
+         (git-overleaf-magit-refresh-remote t))))))
 
 (defun git-overleaf-magit--operation-succeeded (repo operation)
   "Refresh REPO's Magit status after a successful Overleaf OPERATION."
-  (when (memq operation '(fetch pull push overwrite))
+  (when (memq operation '(fetch overwrite-local pull push overwrite))
     (let ((default-directory repo))
       (when-let* ((buffer (magit-get-mode-buffer 'magit-status-mode)))
         (with-current-buffer buffer
