@@ -905,7 +905,7 @@ metadata."
   (git-overleaf--message "Local and remote content already match; base ref updated"))
 
 (defun git-overleaf--upload-head-and-set-base
-    (repo head project-id remote-root remote-table format-string &rest args)
+    (repo head project-id remote-root remote-table success-message)
   "Upload HEAD from REPO to Overleaf, update the base ref, and report success."
   (git-overleaf--sync-commit
    repo head project-id remote-root remote-table)
@@ -913,11 +913,11 @@ metadata."
   (git-overleaf--set-base-ref repo head)
   (git-overleaf--set-remote-ref repo head)
   (git-overleaf--record-remote-fetch-time repo)
-  (apply #'git-overleaf--message format-string args))
+  (git-overleaf--message "%s" success-message))
 
 (defun git-overleaf--upload-target-with-journal
     (repo target remote-commit project-id remote-root remote-table
-          format-string &rest args)
+          success-message)
   "Upload TARGET and retain a resumable journal until all mutations succeed."
   (let ((pending (git-overleaf--pending-state repo)))
     (unless (and (eq (plist-get pending :action) 'push)
@@ -925,9 +925,8 @@ metadata."
       (git-overleaf--create-local-backup-ref
        repo "pending-push-target" target))
     (git-overleaf--set-pending-push-state repo remote-commit target)
-    (apply
-     #'git-overleaf--upload-head-and-set-base
-     repo target project-id remote-root remote-table format-string args)
+    (git-overleaf--upload-head-and-set-base
+     repo target project-id remote-root remote-table success-message)
     (git-overleaf--clear-pending-state repo)))
 
 (defun git-overleaf--finalize-pending-pull
@@ -949,8 +948,8 @@ REMOTE-ROOT and REMOTE-TABLE describe the current remote state."
               repo remote-root remote-tree 'pull)))
         (git-overleaf--upload-target-with-journal
          repo head current-remote project-id remote-root remote-table
-       "Pushed merged Overleaf pull for `%s'"
-         (git-overleaf--project-name repo))))))
+         (format "Pushed merged Overleaf pull for `%s'"
+                 (git-overleaf--project-name repo)))))))
 
 (defun git-overleaf--fresh-push (repo remote-root remote-table &optional force)
   "Push REPO using REMOTE-ROOT and REMOTE-TABLE.
@@ -969,8 +968,8 @@ When FORCE is non-nil, replace divergent remote content with HEAD."
               (git-overleaf--clear-pending-state repo))
           (git-overleaf--upload-target-with-journal
            repo head remote-commit project-id remote-root remote-table
-           "Force-pushed `%s' to Overleaf"
-           (git-overleaf--project-name repo)))
+           (format "Force-pushed `%s' to Overleaf"
+                   (git-overleaf--project-name repo))))
       (pcase status
       ('in-sync
        (git-overleaf--upload-sync-metadata repo head project-id remote-table)
@@ -988,8 +987,8 @@ When FORCE is non-nil, replace divergent remote content with HEAD."
       ('remote-matches-base
        (git-overleaf--upload-target-with-journal
         repo head remote-commit project-id remote-root remote-table
-        "Pushed `%s' to Overleaf"
-        (git-overleaf--project-name repo)))
+        (format "Pushed `%s' to Overleaf"
+                (git-overleaf--project-name repo))))
       ('head-matches-base
        (user-error
 	        "Remote Overleaf changes exist for `%s'; run `git-overleaf-pull' first"
@@ -1022,8 +1021,8 @@ When FORCE is non-nil, replace divergent remote content with HEAD."
       (git-overleaf--upload-target-with-journal
        repo target current (git-overleaf--project-id repo)
        remote-root remote-table
-       "Resumed push of `%s' to Overleaf"
-       (git-overleaf--project-name repo)))))
+       (format "Resumed push of `%s' to Overleaf"
+               (git-overleaf--project-name repo))))))
 
 (defun git-overleaf--push-with-remote-state
     (repo remote-root remote-table &optional force)
