@@ -184,6 +184,11 @@ Display LABEL using FACE."
       (git-overleaf--remote-name repo)
     (user-error "ambiguous")))
 
+(defun git-overleaf-magit--secondary-heading (heading)
+  "Return indented secondary Overleaf HEADING text for Magit."
+  (propertize (concat "  " heading)
+              'font-lock-face 'magit-section-secondary-heading))
+
 (defun git-overleaf-magit--diff-kinds (local-in-sync sync-status)
   "Return diff kinds to show for LOCAL-IN-SYNC and SYNC-STATUS."
   (pcase sync-status
@@ -247,7 +252,8 @@ cached Overleaf snapshot commit."
                         base-rev
                         "HEAD")))))
     (magit-insert-section (git-overleaf-magit-diff-section kind t)
-      (magit-insert-heading heading)
+      (magit-insert-heading
+        (git-overleaf-magit--secondary-heading heading))
       (magit-insert-section-body
         (let ((default-directory repo))
           (magit--insert-diff nil "diff" from to "--no-prefix"))))))
