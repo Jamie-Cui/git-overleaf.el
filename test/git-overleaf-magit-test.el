@@ -89,6 +89,13 @@
       "Project" nil "remote unchecked" 'magit-dimmed))
     "Overleaf: Project [unregistered] (remote unchecked)")))
 
+(ert-deftest git-overleaf-magit-test-diff-headings-are-secondary ()
+  (let ((heading (git-overleaf-magit--secondary-heading "Local changes")))
+    (should (equal (substring-no-properties heading) "  Local changes"))
+    (should
+     (eq (get-text-property 0 'font-lock-face heading)
+         'magit-section-secondary-heading))))
+
 (ert-deftest git-overleaf-magit-test-operation-description ()
   (cl-letf (((symbol-function 'git-overleaf-magit--require-managed-repo)
              (lambda () "/repo"))
